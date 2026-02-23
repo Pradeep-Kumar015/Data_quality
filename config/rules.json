@@ -1,0 +1,18 @@
+[
+  {
+    "RULE_ID": "DQ_001",
+    "RULE_TYPE": "NULL_CHECK"
+  },
+  {
+    "RULE_ID": "DQ_002",
+    "RULE_TYPE": "DUPLICATE_CHECK"
+  },
+  {
+    "RULE_ID": "DQ_003",
+    "RULE_TYPE": "RANGE_CHECK"
+  },
+  {
+    "RULE_ID": "DQ_004",
+    "RULE_TYPE": "MIN_LENGTH_CHECK"
+  }
+]

@@ -1,0 +1,47 @@
+{
+  "family": "UDX",
+  "database": "DEMO_DB",
+  "schema": "PUBLIC",
+  "table": "UDX_items",
+
+  "table_rules": [
+    {
+      "rule_id": "DQ_002",
+      "rule": "DUPLICATE_CHECK",
+      "columns": ["ITEMNUM"],
+      "threshold": 0.00
+    }
+  ],
+
+  "columns": [
+    {
+      "column": "MSDSNUM",
+      "rules": [
+        { "rule_id":"DQ_001", "rule": "NULL_CHECK", "threshold": 0.20},
+        { 
+          "rule_id": "DQ_003",
+          "rule": "RANGE_CHECK",
+          "min_value": 800,
+          "max_value": 1000,
+          "threshold": 0.00
+        }
+      ]
+    },
+    {
+      "column": "ITEMNUM",
+      "rules": [
+        {
+          "rule_id": "DQ_004",
+          "rule": "MIN_LENGTH_CHECK",
+          "min_length": 4,
+          "threshold": 0.00
+        }
+      ]
+    }
+  ],
+
+  "scD": "HIGH",
+  "IS_ACTIVE": true,
+  "CREATED_BY": "DQ_TOOL",
+  "CREATED_DATE": "2025-01-01"
+}
