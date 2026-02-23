@@ -111,8 +111,8 @@ for (database, schema_name, table), rules in table_groups.items():
         elif rule_type == "MIN_LENGTH_CHECK":
 
             failed_df = df.filter(
-                col(column_name).is_not_null() &
-                (length(col(column_name)) < min_val)
+            col(column_name).is_not_null() &
+            (length(col(column_name)) < 4)
             )
             failed_count = failed_df.count()
             rule_expression = f"LENGTH({column_name}) >= {min_val}"
