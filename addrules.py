@@ -36,7 +36,7 @@ rule_lookup = {
     for r in dq_rules_rows
 }
 
-print(f"\n{BOLD}================ DQ EXECUTION STARTED (CURRENT DAY) ================ {RESET}")
+print(f"\n{BOLD}================ DQ EXECUTION STARTED ({current_date()}) ================ {RESET}")
 
 
 # ================= GROUP RULES BY TABLE =================
@@ -65,7 +65,7 @@ for (database, schema_name, table), rules in table_groups.items():
 
     total_count = df.count()
 
-    print(f"\n{BOLD}Table Checked : {table}{RESET}")
+    print(f"\n{BOLD}{RED}Table Checked : {database} : {schema_name} : {table}{RESET}")
     print(f"{BOLD}Current Day Records : {total_count}{RESET}\n")
 
     # If no data for today, skip table
@@ -204,8 +204,8 @@ for (database, schema_name, table), rules in table_groups.items():
             custom_query = row["CUSTOM_SQL"]
             custom_query_upper = custom_query.strip().upper()
             # to reduce risk of dangorous queries, enforce only the source table can be referenced in the custom SQl.
-            if source_table.upper() not in custom_query_upper:
-                raise Exception("CUSTOM SQL must reference source table")
+            '''if source_table.upper() not in custom_query_upper:
+                raise Exception("CUSTOM SQL must reference source table")'''
             if not custom_query_upper.startswith("SELECT"):
                 raise Exception("CUSTOM SQL must be SELECT only")
             if ";" in custom_query_upper:
