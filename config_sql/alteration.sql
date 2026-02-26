@@ -1,5 +1,0 @@
-ALTER TABLE demo_db.public.dq_config
-ADD COLUMN PATTERN STRING;
-
-ALTER TABLE demo_db.public.dq_config
-ADD COLUMN CUSTOM_SQL STRING;
