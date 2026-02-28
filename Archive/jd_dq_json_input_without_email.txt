@@ -1,0 +1,207 @@
+USE DATABASE DQ;
+CREATE OR REPLACE PROCEDURE RUN_DQ_FROM_JSON(DQ_PAYLOAD VARIANT)
+RETURNS STRING
+LANGUAGE PYTHON
+RUNTIME_VERSION = '3.10'
+PACKAGES = ('snowflake-snowpark-python')
+HANDLER = 'run_dq'
+AS
+$$
+
+from snowflake.snowpark import Session
+import uuid
+from datetime import datetime
+
+def run_dq(session: Session, DQ_PAYLOAD):
+
+    run_id = str(uuid.uuid4())
+
+    try:
+
+        # -----------------------------------
+        # Extract table details from JSON
+        # -----------------------------------
+
+        database = DQ_PAYLOAD["dq_run_config"]["database"]
+        schema = DQ_PAYLOAD["dq_run_config"]["schema"]
+        table = DQ_PAYLOAD["dq_run_config"]["table"]
+
+        full_table = f"{database}.{schema}.{table}"
+
+        # -----------------------------------
+        # Start Run
+        # -----------------------------------
+
+        session.sql(f"""
+        INSERT INTO RESULT_RUN_MASTER
+        (RUN_ID, TABLE_NAME, RUN_STATUS, START_TIME)
+        VALUES
+        ('{run_id}', '{table}', 'STARTED', CURRENT_TIMESTAMP)
+        """).collect()
+
+
+        rules = DQ_PAYLOAD["rules"]
+
+        # -----------------------------------
+        # Loop Through Rules
+        # -----------------------------------
+
+        for rule in rules:
+
+            rule_id = rule["rule_id"]
+            rule_type = rule["rule_type"]
+            rule_name = rule["rule_name"]
+            severity = rule["severity"]
+            severity_weight = rule["severity_weight"]
+            threshold = rule["threshold_pct"]
+
+            operator = rule.get("operator")
+            value1 = rule.get("value_1")
+            value2 = rule.get("value_2")
+
+            columns = rule["columns"]
+
+            # -----------------------------------
+            # Loop Through Columns
+            # -----------------------------------
+
+            for column in columns:
+
+                error_message = None
+
+                try:
+
+                    if rule_type == "NOT_NULL":
+
+                        condition = f"{column} IS NOT NULL"
+                        failure_condition = f"{column} IS NULL"
+
+                    elif rule_type == "COMPARISON":
+
+                        condition = f"{column} {operator} {value1}"
+                        failure_condition = f"NOT ({condition}) OR {column} IS NULL"
+
+                    elif rule_type == "RANGE":
+
+                        condition = f"{column} BETWEEN {value1} AND {value2}"
+                        failure_condition = f"NOT ({condition}) OR {column} IS NULL"
+
+                    elif rule_type == "BINARY":
+
+                        condition = f"{column} {operator} '{value1}'"
+                        failure_condition = f"NOT ({condition}) OR {column} IS NULL"
+
+                    elif rule_type == "DOMAIN":
+
+                        values_list = ",".join([f"'{v}'" for v in value1])
+                        condition = f"{column} IN ({values_list})"
+                        failure_condition = f"{column} IS NULL OR {column} NOT IN ({values_list})"
+
+                    else:
+
+                        error_message = f"Unsupported rule type {rule_type}"
+                        condition = "1=1"
+                        failure_condition = "1=0"
+
+                except Exception as ex:
+
+                    error_message = str(ex)
+                    condition = "1=1"
+                    failure_condition = "1=0"
+
+
+                # -----------------------------------
+                # Single Scan Count
+                # -----------------------------------
+
+                result = session.sql(f"""
+                    SELECT
+                    COUNT(*) TOTAL,
+                    SUM(CASE WHEN {failure_condition} THEN 1 ELSE 0 END) FAILED
+                    FROM {full_table}
+                """).collect()[0]
+
+
+                total = result[0]
+                failed = result[1]
+                passed = total - failed
+
+                failure_pct = (failed/total*100) if total > 0 else 0
+                breached = failure_pct > threshold
+                status = "FAIL" if breached else "PASS"
+
+                safe_condition = condition.replace("'", "''")
+
+
+                # -----------------------------------
+                # Insert Result
+                # -----------------------------------
+
+                session.sql(f"""
+                INSERT INTO DQ_RESULT_TABLE
+                (
+                RULE_ID,
+                RULE_TYPE,
+                DATABASE_NAME,
+                SCHEMA_NAME,
+                TABLE_NAME,
+                COLUMN_NAME,
+                RULE_EXPRESSION,
+                THRESHOLD,
+                SEVERITY,
+                TOTAL_RECORD_COUNT,
+                FAILED_RECORD_COUNT,
+                PASSED_RECORD_COUNT,
+                FAILURE_PERCENTAGE,
+                RULE_STATUS,
+                IS_THRESHOLD_BREACHED,
+                CREATED_TIMESTAMP
+                )
+                VALUES
+                (
+                '{rule_id}',
+                '{rule_type}',
+                '{database}',
+                '{schema}',
+                '{table}',
+                '{column}',
+                '{safe_condition}',
+                {threshold},
+                '{severity}',
+                {total},
+                {failed},
+                {passed},
+                {round(failure_pct,2)},
+                '{status}',
+                {str(breached).upper()},
+                CURRENT_TIMESTAMP
+                )
+                """).collect()
+
+
+        # -----------------------------------
+        # Complete Run
+        # -----------------------------------
+
+        session.sql(f"""
+        UPDATE RESULT_RUN_MASTER
+        SET RUN_STATUS='COMPLETED',
+        END_TIME=CURRENT_TIMESTAMP
+        WHERE RUN_ID='{run_id}'
+        """).collect()
+
+        return "DQ Run Completed " + run_id
+
+
+    except Exception as e:
+
+        session.sql(f"""
+        UPDATE RESULT_RUN_MASTER
+        SET RUN_STATUS='FAILED',
+        END_TIME=CURRENT_TIMESTAMP
+        WHERE RUN_ID='{run_id}'
+        """).collect()
+
+        return "DQ Run Failed: " + str(e)
+
+$$;
