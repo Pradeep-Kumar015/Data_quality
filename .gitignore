@@ -1,10 +1,8 @@
 __pycache__/
 *.pyc
+venv/
 .venv/
 .env
 .vscode/
 .DS_Store
-config_sql/alteration.sql
-addrules.py 
-justrules.py 
-countflectualtion.py
+countflectuation.py
