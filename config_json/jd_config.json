@@ -1,0 +1,88 @@
+{
+  "dq_run_config": {
+    "database": "DQ",
+    "schema": "DATA_QUALITY",
+    "table": "INVENTORY"
+  },
+
+  "rules": [
+
+    {
+      "rule_id": 1,
+      "rule_name": "NOT NULL CHECK",
+      "rule_type": "NOT_NULL",
+      "severity": "CRITICAL",
+      "severity_weight": 5,
+      "threshold_pct": 0,
+      "columns": [
+        "ITEMNUM",
+        "LOCATION"
+      ]
+    },
+
+    {
+      "rule_id": 2,
+      "rule_name": "POSITIVE CHECK",
+      "rule_type": "COMPARISON",
+      "operator": ">=",
+      "value_1": "0",
+      "value_2": null,
+      "severity": "HIGH",
+      "severity_weight": 4,
+      "threshold_pct": 5,
+      "columns": [
+        "MINLEVEL",
+        "MAXLEVEL"
+      ]
+    },
+
+    {
+      "rule_id": 3,
+      "rule_name": "PERCENT RANGE CHECK",
+      "rule_type": "RANGE",
+      "operator": "BETWEEN",
+      "value_1": "0",
+      "value_2": "100",
+      "severity": "HIGH",
+      "severity_weight": 4,
+      "threshold_pct": 2,
+      "columns": [
+        "RECEIPTTOLERANCE"
+      ]
+    },
+
+    {
+      "rule_id": 4,
+      "rule_name": "FLAG VALID",
+      "rule_type": "BINARY",
+      "operator": "=",
+      "value_1": "Y",
+      "value_2": null,
+      "severity": "MEDIUM",
+      "severity_weight": 3,
+      "threshold_pct": 5,
+      "columns": [
+        "REORDER"
+      ]
+    },
+
+    {
+      "rule_id": 5,
+      "rule_name": "STATUS VALID",
+      "rule_type": "DOMAIN",
+      "operator": "IN",
+      "value_1": [
+        "ACTIVE",
+        "INACTIVE"
+      ],
+      "value_2": null,
+      "severity": "HIGH",
+      "severity_weight": 4,
+      "threshold_pct": 2,
+      "columns": [
+        "STATUS"
+      ]
+    }
+
+  ]
+}
