@@ -1,81 +1,65 @@
 from snowflake.snowpark import Session
-from snowflake.snowpark.functions import (
-    col,
-    length,
-    current_date
-)
+from snowflake.snowpark.functions import col, length, current_date, regexp_like, trim, lit, to_variant
 from datetime import datetime
 import json
-from snowflake.snowpark.functions import regexp_like
+
 
 # ================= TERMINAL COLORS =================
 GREEN = "\033[92m"
 RED = "\033[91m"
 RESET = "\033[0m"
 BOLD = "\033[1m"
-
-
+MAGENTA = "\033[95m"
+CYAN = "\033[96m"
 # ================= CONNECTION =================
 with open("connection/conn.json") as conn:
     connection_parameters = json.load(conn)
 
 session = Session.builder.configs(connection_parameters).create()
 
-
 # ================= LOAD CONFIG TABLE =================
 dq_config_df = (
-    session.table("DEMO_DB.PUBLIC.DQ_CONFIG")
+    session.table("DEMO_DB.PUBLIC.DQ_CONFIG_AK")
     .filter(col("IS_ACTIVE") == True)
 )
 
 # ================= LOAD RULE LOOKUP =================
 dq_rules_rows = session.table("DEMO_DB.PUBLIC.DQ_RULES").collect()
 
-rule_lookup = {
-    r["RULE_ID"]: r["RULE_NAME"]
-    for r in dq_rules_rows
-}
+rule_lookup = {r["RULE_ID"]: r["RULE_NAME"] for r in dq_rules_rows}
 
-print(f"\n{BOLD}================ DQ EXECUTION STARTED (CURRENT DAY) ================ {RESET}")
-
+cur_date = datetime.now().date()
+print(cur_date)
+print(f"\n{BOLD}================ DQ EXECUTION STARTED {cur_date}================ {RESET}")
 
 # ================= GROUP RULES BY TABLE =================
 table_groups = {}
 
 for row in dq_config_df.to_local_iterator():
-
-    table_key = (
-        row["DATABASE_NAME"],
-        row["SCHEMA_NAME"],
-        row["TABLE_NAME"]
-    )
-
+    table_key = (row["DATABASE_NAME"], row["SCHEMA_NAME"], row["TABLE_NAME"])
     table_groups.setdefault(table_key, []).append(row)
-
 
 # ================= PROCESS EACH TABLE =================
 for (database, schema_name, table), rules in table_groups.items():
 
     source_table = f"{database}.{schema_name}.{table}"
-
-    # 🔥 IMPORTANT CHANGE → Filter for Current Day
-    df = session.table(source_table).filter(
-        col("LOAD_DATE") == current_date()
-    )
+    df = session.table(source_table).filter(col("LOAD_DATE") == current_date())
 
     total_count = df.count()
 
     print(f"\n{BOLD}Table Checked : {table}{RESET}")
     print(f"{BOLD}Current Day Records : {total_count}{RESET}\n")
 
-    # If no data for today, skip table
     if total_count == 0:
-        print(f"{RED}No records found for current day. Skipping...{RESET}")
+        print(f"{MAGENTA}No records found for current day. Skipping...{RESET}")
         continue
 
     for row in rules:
 
         start_time = datetime.now()
+        error_message = None
+        failed_df = None
+        rule_expression = None
 
         rule_id = row["RULE_ID"]
         rule_type = rule_lookup.get(rule_id)
@@ -90,171 +74,134 @@ for (database, schema_name, table), rules in table_groups.items():
         threshold = float(row["THRESHOLD"])
         severity = row["SEVERITY"]
         executed_by = row["CREATED_BY"]
+        print(f"{BOLD}Executing Rule: {rule_type} on Column: {column_name}{RESET}")
+        try:
+            if rule_type == "NULL_CHECK":
 
-        # ================= RULE LOGIC =================
+                failed_df = df.filter(col(column_name).is_null())
+                rule_expression = f"{column_name} IS NULL"
 
-        if rule_type == "NULL_CHECK":
+            elif rule_type == "RANGE_CHECK":
 
-            failed_df = df.filter(col(column_name).is_null())
-            failed_count = failed_df.count()
-            rule_expression = f"{column_name} IS NOT NULL"
-
-        elif rule_type == "RANGE_CHECK":
-            if min_val is None or max_val is None:
-                raise Exception("RANGE_CHECK requires MIN_VALUE and MAX_VALUE")
-            failed_df = df.filter(
-                col(column_name).is_not_null() &
-                (
-                    (col(column_name) < min_val) |
-                    (col(column_name) > max_val)
+                failed_df = df.filter(
+                    col(column_name).is_not_null() &
+                    ((col(column_name) < min_val) | (col(column_name) > max_val))
                 )
-            )
+                rule_expression = f"{column_name} BETWEEN {min_val} AND {max_val}"
+
+            elif rule_type == "MIN_LENGTH_CHECK":
+
+                failed_df = df.filter(
+                    col(column_name).is_not_null() &
+                    (length(col(column_name)) < min_val)
+                )
+                rule_expression = f"LENGTH({column_name}) >= {min_val}"
+
+            elif rule_type == "DUPLICATE_CHECK":
+
+                col_list = [c.strip() for c in column_name.split(",")]
+
+                dup_df = (
+                    df.group_by([col(c) for c in col_list])
+                    .count()
+                    .filter(col("COUNT") > 1)
+                    .select(*col_list)
+                )
+
+                failed_df = df.join(dup_df, col_list, "inner")
+                rule_expression = f"DUPLICATE CHECK ON ({column_name})"
+
+            elif rule_type == "EMPTY_STRING_CHECK":
+
+                failed_df = df.filter(
+                    col(column_name).is_not_null() &
+                    (trim(col(column_name)) == "")
+                )
+                rule_expression = f"{column_name} IS EMPTY"
+
+            elif rule_type == "MAX_LENGTH_CHECK":
+
+                failed_df = df.filter(
+                    col(column_name).is_not_null() &
+                    (length(col(column_name)) > max_val)
+                )
+                rule_expression = f"LENGTH({column_name}) <= {max_val}"
+
+            elif rule_type == "EXACT_LENGTH_CHECK":
+
+                failed_df = df.filter(
+                    col(column_name).is_not_null() &
+                    (length(col(column_name)) != min_val)
+                )
+                rule_expression = f"LENGTH({column_name}) = {min_val}"
+
+            elif rule_type == "POSITIVE_CHECK":
+
+                failed_df = df.filter(
+                    col(column_name).is_not_null() &
+                    (col(column_name) <= 0)
+                )
+                rule_expression = f"{column_name} > 0"
+
+            elif rule_type == "REGEX_CHECK":
+
+                pattern = row["PATTERN"]
+
+                failed_df = df.filter(
+                    col(column_name).is_not_null() &
+                    (~regexp_like(col(column_name), lit(pattern)))
+                )
+
+                rule_expression = f"{column_name} MATCHES {pattern}"
+
+            elif rule_type == "NOT_FUTURE_DATE_CHECK":
+
+                failed_df = df.filter(col(column_name) > current_date())
+                rule_expression = f"{column_name} <= CURRENT_DATE"
+
+            elif rule_type == "CUSTOM_SQL_CHECK":
+
+                custom_query = row["CUSTOM_SQL"].strip().upper()
+
+                if not custom_query.startswith("SELECT"):
+                    raise Exception("CUSTOM SQL must be SELECT only")
+
+                for keyword in ["INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE"]:
+                    if keyword in custom_query:
+                        raise Exception("DML/DDL not allowed")
+
+                failed_df = session.sql(row["CUSTOM_SQL"])
+                rule_expression = f"CUSTOM SQL"
+
+            else:
+                raise Exception(f"Unsupported rule type {rule_type}")
+
             failed_count = failed_df.count()
-            rule_expression = f"{column_name} BETWEEN {min_val} AND {max_val}"
+            passed_count = total_count - failed_count
+            failure_percentage = failed_count / total_count
+            threshold_breached = failure_percentage > threshold
+            rule_status = "FAIL" if threshold_breached else "PASS"
 
-        elif rule_type == "MIN_LENGTH_CHECK":
+        except Exception as e:
 
-            failed_df = df.filter(
-            col(column_name).is_not_null() &
-            (length(col(column_name)) < min_val)  # the value is hard coded!!!!!!!!!!!!!!!!!!!!!!!!!
-            )
-            failed_count = failed_df.count()
-            rule_expression = f"LENGTH({column_name}) >= {min_val}"
+            error_message = str(e)
+            failed_count = 0
+            passed_count = 0
+            failure_percentage = 0
+            threshold_breached = False
+            rule_status = "ERROR"
 
-        elif rule_type == "DUPLICATE_CHECK":
-
-            col_list = [c.strip() for c in column_name.split(",")]
-
-            dup_df = (
-                df.group_by([col(c) for c in col_list])
-                  .count()
-                  .filter(col("COUNT") > 1)
-                  .select(*col_list)
-            )
-            #the previous dup_df was grouping all the duplicates together
-            failed_df = df.join(
-                dup_df,
-                col_list,
-                "inner"
-            )
-            failed_count = failed_df.count()
-            rule_expression = f"DUPLICATE CHECK ON ({column_name})"
-
-        #       NEW RULE TYPES  
-        # 1. this rule apply only for string columns
-        elif rule_type == "NOT_NULL_CHECK":
-
-            failed_df = df.filter(
-                col(column_name).is_null() |
-                (trim(col(column_name)) == "") |
-                (length(col(column_name)) == 0)
-            )
-            failed_count = failed_df.count()
-            rule_expression = f"{column_name} IS NOT NULL AND NOT EMPTY"
-
-        # 2. max length check for string columns
-        elif rule_type == "MAX_LENGTH_CHECK":
-
-            failed_df = df.filter(
-                length(col(column_name)) > max_val
-            )
-
-            failed_count = failed_df.count()
-            rule_expression = f"LENGTH({column_name}) <= {max_val}"
-
-        # 3. Exact match check for string columns
-        elif rule_type == "EXACT_LENGTH_CHECK":
-
-            failed_df = df.filter(
-                length(col(column_name)) != int(row["THRESHOLD"])
-            )
-
-            failed_count = failed_df.count()
-            rule_expression = f"LENGTH({column_name}) = {row['THRESHOLD']}"
-        
-        # 4. positive number check for numeric columns
-        elif rule_type == "POSITIVE_CHECK":
-
-            failed_df = df.filter(col(column_name) <= 0)
-            failed_count = failed_df.count()
-            rule_expression = f"{column_name} > 0"
-
-        # 5. regular expression check for string columns
-        elif rule_type == "REGEX_CHECK":
-            #pattern should be another column in config table eg : "^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$" for email validation
-            pattern = row["PATTERN"]  #regex pattern is stored in this column in config table
-            failed_df = df.filter(
-                col(column_name).is_not_null() &
-                ~regexp_like(col(column_name), pattern) 
-            )
-            failed_count = failed_df.count()
-            rule_expression = f"{column_name} MATCHES {pattern}"
-
-        # 6. future date check for date columns
-        elif rule_type == "NOT_FUTURE_DATE_CHECK":
-
-            failed_df = df.filter(col(column_name) > current_date())
-
-            failed_count = failed_df.count()
-            rule_expression = f"{column_name} <= CURRENT_DATE"
-
-        # 7. custom SQL expression check - this allows users to write their own SQL expression in the config table 
-        elif rule_type == "CUSTOM_SQL":
-
-            custom_query = row["CUSTOM_SQL"]
-            custom_query_upper = custom_query.strip().upper()
-            # to reduce risk of dangorous queries, enforce only the source table can be referenced in the custom SQl.
-            if source_table.upper() not in custom_query_upper:
-                raise Exception("CUSTOM SQL must reference source table")
-            if not custom_query_upper.startswith("SELECT"):
-                raise Exception("CUSTOM SQL must be SELECT only")
-            if ";" in custom_query_upper:
-                raise Exception("CUSTOM SQL must not contain multiple statements")
-            for keyword in ["INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE"]:
-                if keyword in custom_query_upper:
-                    raise Exception("DML/DDL statements not allowed in CUSTOM SQL")
-            failed_df = session.sql(custom_query)
-            failed_count = failed_df.count()
-            rule_expression = f"CUSTOM SQL: {custom_query}"
-
-        else:
-            print(f"Unsupported rule type: {rule_type}")
-            continue
-
-
-
-        # ================= METRICS =================
-        passed_count = total_count - failed_count
-
-        failure_percentage = (
-            failed_count / total_count if total_count > 0 else 0
-        )
-
-        threshold_breached = failure_percentage > threshold
-        rule_status = "FAIL" if threshold_breached else "PASS"
-
-        failed_sample = failed_df.limit(5).collect()
-        failed_sample_json = [r.as_dict() for r in failed_sample]
-
-        color = RED if rule_status == "FAIL" else GREEN
-
-        print("-------------------------------------------")
-        print(f"Rule ID         : {rule_id}")
-        print(f"Rule Type       : {rule_type}")
-        print(f"Column(s)       : {column_name}")
-        print(f"Failed Records  : {failed_count}")
-        print(f"Failure %       : {round(failure_percentage,4)}")
-        print(f"Threshold       : {threshold}")
-        print(f"Status          : {color}{rule_status}{RESET}")
-        print("-------------------------------------------\n")
+        failed_sample_json = []
+        if failed_df:
+            failed_sample = failed_df.limit(5).collect()
+            failed_sample_json = [r.as_dict() for r in failed_sample]
 
         end_time = datetime.now()
-        duration = (end_time - start_time).total_seconds()
+        duration = int((end_time - start_time).total_seconds())
 
         query_id = session.sql("SELECT LAST_QUERY_ID()").collect()[0][0]
         warehouse = session.get_current_warehouse()
 
-        # ================= INSERT RESULT =================
         result_row = {
             "RULE_ID": rule_id,
             "RULE_TYPE": rule_type,
@@ -279,7 +226,7 @@ for (database, schema_name, table), rules in table_groups.items():
             "SOURCE_TYPE": "TABLE",
             "SOURCE_LOCATION": source_table,
             "FAILED_SAMPLE_DATA": failed_sample_json,
-            "ERROR_MESSAGE": None,
+            "ERROR_MESSAGE": error_message,
             "IS_ACTIVE": True,
             "EXECUTED_BY": executed_by,
             "EXECUTION_MODE": "SNOWPARK_INCREMENTAL",
@@ -288,8 +235,10 @@ for (database, schema_name, table), rules in table_groups.items():
         }
 
         session.create_dataframe([result_row]) \
-               .write.mode("append") \
-               .save_as_table("DEMO_DB.PUBLIC.DQ_RESULT_TABLE")
+            .write.mode("append") \
+            .save_as_table("DEMO_DB.PUBLIC.DQ_RESULT_TABLE_AK")
+
+        print(f"{BOLD}{CYAN}__________________________________________{RESET}")
 
 
-print(f"{BOLD}DQ EXECUTION COMPLETED SUCCESSFULLY (CURRENT DAY DATA){RESET}\n")
+print(f"{BOLD}DQ EXECUTION COMPLETED SUCCESSFULLY ({cur_date} DATA){RESET}\n")
