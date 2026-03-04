@@ -159,7 +159,7 @@ for (database, schema_name, table), rules in table_groups.items():
                 failed_df = df.filter(col(column_name) > current_date())
                 rule_expression = f"{column_name} <= CURRENT_DATE"
 
-            elif rule_type == "CUSTOM_SQL_CHECK":
+            elif rule_type == "CUSTOM_SQL":
 
                 custom_query = row["CUSTOM_SQL"].strip().upper()
 
@@ -238,7 +238,7 @@ for (database, schema_name, table), rules in table_groups.items():
             .write.mode("append") \
             .save_as_table("DEMO_DB.PUBLIC.DQ_RESULT_TABLE_AK")
 
-        print(f"{BOLD}{CYAN}__________________________________________{RESET}")
+        print(f"{BOLD}{CYAN}--------------------------------------------{RESET}")
 
 
 print(f"{BOLD}DQ EXECUTION COMPLETED SUCCESSFULLY ({cur_date} DATA){RESET}\n")
