@@ -5,3 +5,9 @@ venv/
 .env
 .vscode/
 .DS_Store
+
+#ignore sql files
+custome_sql.sql
+
+#ignore python files
+trial.py

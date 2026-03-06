@@ -1,6 +1,13 @@
-insert into demo_db.public.dq_rules
-values
+--rules table after new rules added
+INSERT INTO demo_db.public.dq_rules VALUES
 ('DQ_001','NULL_CHECK'),
 ('DQ_002','DUPLICATE_CHECK'),
 ('DQ_003','RANGE_CHECK'),
-('DQ_004','MIN_LENGTH_CHECK')
+('DQ_004','MIN_LENGTH_CHECK'),
+('DQ_005','EMPTY_STRING_CHECK'),
+('DQ_006','MAX_LENGTH_CHECK'),
+('DQ_007','EXACT_LENGTH_CHECK'),
+('DQ_008','POSITIVE_CHECK'),
+('DQ_009','REGEX_CHECK'),
+('DQ_010','NOT_FUTURE_DATE_CHECK'),
+('DQ_011','CUSTOM_SQL');

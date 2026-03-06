@@ -1,3 +1,13 @@
+'''
+The config table : DEMO_DB.PUBLIC.DQ_CONFIG_AK
+The rule table : DEMO_DB.PUBLIC.DQ_RULES
+The result table : DEMO_DB.PUBLIC.DQ_RESULT_TABLE_AK
+
+Bash:
+source venv/bin/activate
+python akdqv1.py
+'''
+
 from snowflake.snowpark import Session
 from snowflake.snowpark.functions import col, length, current_date, regexp_like, trim, lit, to_variant
 from datetime import datetime
@@ -29,7 +39,6 @@ dq_rules_rows = session.table("DEMO_DB.PUBLIC.DQ_RULES").collect()
 rule_lookup = {r["RULE_ID"]: r["RULE_NAME"] for r in dq_rules_rows}
 
 cur_date = datetime.now().date()
-print(cur_date)
 print(f"\n{BOLD}================ DQ EXECUTION STARTED {cur_date}================ {RESET}")
 
 # ================= GROUP RULES BY TABLE =================

@@ -8,6 +8,8 @@ rule_id string,
 column_names string,
 min_value int,
 max_value int,
+pattern string, --regex pattern for regex check
+custom_sql string,  -- custom sql for custom sql check
 threshold float,
 severity string,
 is_active boolean,
