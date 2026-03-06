@@ -6,6 +6,7 @@ from snowflake.snowpark.functions import (
 )
 from datetime import datetime
 import json
+from rules import null_check, range_check, min_length_check, duplicate_check
 
 
 # ================= TERMINAL COLORS =================
@@ -94,42 +95,20 @@ for (database, schema_name, table), rules in table_groups.items():
         # ================= RULE LOGIC =================
 
         if rule_type == "NULL_CHECK":
-
-            failed_df = df.filter(col(column_name).is_null())
-            failed_count = failed_df.count()
-            rule_expression = f"{column_name} IS NOT NULL"
+            failed_df, failed_count, rule_expression = \
+            null_check.execute(df, column_name)
 
         elif rule_type == "RANGE_CHECK":
-
-            failed_df = df.filter(
-                (col(column_name) < min_val) |
-                (col(column_name) > max_val)
-            )
-            failed_count = failed_df.count()
-            rule_expression = f"{column_name} BETWEEN {min_val} AND {max_val}"
+            failed_df, failed_count, rule_expression = \
+                range_check.execute(df, column_name, min_val, max_val)
 
         elif rule_type == "MIN_LENGTH_CHECK":
-
-            failed_df = df.filter(
-            col(column_name).is_not_null() &
-            (length(col(column_name)) < 4)
-            )
-            failed_count = failed_df.count()
-            rule_expression = f"LENGTH({column_name}) >= {min_val}"
+            failed_df, failed_count, rule_expression = \
+                min_length_check.execute(df, column_name, min_val)
 
         elif rule_type == "DUPLICATE_CHECK":
-
-            col_list = [c.strip() for c in column_name.split(",")]
-
-            dup_df = (
-                df.group_by([col(c) for c in col_list])
-                  .count()
-                  .filter(col("COUNT") > 1)
-            )
-
-            failed_df = dup_df
-            failed_count = dup_df.count()
-            rule_expression = f"DUPLICATE CHECK ON ({column_name})"
+            failed_df, failed_count, rule_expression = \
+                duplicate_check.execute(df, column_name)
 
         else:
             print(f"Unsupported rule type: {rule_type}")
