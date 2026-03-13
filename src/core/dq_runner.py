@@ -7,19 +7,24 @@ from alerts.email_alert import EmailAlert
 
 from utils.logger import get_logger
 
+from dotenv import load_dotenv
+import os
+
+# ---------------- LOAD ENV VARIABLES ----------------
+load_dotenv()
+
 logger = get_logger(__name__)
 
+# ---------------- ALERT CONFIG ----------------
+TEAMS_WEBHOOK = os.getenv("TEAMS_WEBHOOK_URL")
 
-# ================= ALERT CONFIG =================
+EMAIL_SMTP = os.getenv("EMAIL_SMTP")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", 587))
 
-TEAMS_WEBHOOK = "YOUR_TEAMS_WEBHOOK"
+EMAIL_USER = os.getenv("EMAIL_USER")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 
-EMAIL_SMTP = "smtp.office365.com"
-EMAIL_PORT = 587
-EMAIL_USER = "dqframework@company.com"
-EMAIL_PASSWORD = "PASSWORD"
-
-EMAIL_RECIPIENTS = ["data-team@company.com"]
+EMAIL_RECIPIENTS = os.getenv("EMAIL_RECIPIENTS", "").split(",")
 
 
 class DQRunner:
@@ -29,14 +34,27 @@ class DQRunner:
         logger.info("Starting Data Quality Framework")
 
         # ---------------- SNOWFLAKE SESSION ----------------
-        session = SnowflakeConnector().create_session()
+        try:
+            session = SnowflakeConnector().create_session()
+            logger.info("Snowflake session created successfully")
+
+        except Exception as e:
+            logger.error(f"Snowflake connection failed: {str(e)}")
+            raise
 
         # ---------------- LOAD CONFIG ----------------
-        config_loader = DBConfigLoader(session)
+        try:
+            config_loader = DBConfigLoader(session)
 
-        dq_config_df = config_loader.load_active_rules()
+            dq_config_df = config_loader.load_active_rules()
 
-        rule_lookup = config_loader.load_rule_lookup()
+            rule_lookup = config_loader.load_rule_lookup()
+
+            logger.info("DQ configuration loaded")
+
+        except Exception as e:
+            logger.error(f"Failed to load DQ configuration: {str(e)}")
+            raise
 
         # ---------------- EXECUTE ENGINE ----------------
         engine = DQEngine(
@@ -50,30 +68,41 @@ class DQRunner:
 
         logger.info("DQ execution finished")
 
-        # ---------------- ALERTS ----------------
+        # ---------------- TEAMS SUMMARY ALERT ----------------
+        try:
+            teams_alert = TeamsAlert(TEAMS_WEBHOOK)
 
-        teams_alert = TeamsAlert(TEAMS_WEBHOOK)
-
-        teams_alert.send_summary_alert(
-            tables_checked,
-            rules_executed,
-            pass_count,
-            fail_count
-        )
-
-        # Send Outlook email only if failures exist
-        if fail_count > 0:
-
-            email_alert = EmailAlert(
-                EMAIL_SMTP,
-                EMAIL_PORT,
-                EMAIL_USER,
-                EMAIL_PASSWORD,
-                EMAIL_RECIPIENTS
-            )
-
-            email_alert.send_failure_summary(
+            teams_alert.send_summary_alert(
+                tables_checked,
                 rules_executed,
                 pass_count,
                 fail_count
             )
+
+            logger.info("Teams summary alert sent")
+
+        except Exception as e:
+            logger.error(f"Teams alert failed: {str(e)}")
+
+        # ---------------- EMAIL FAILURE ALERT ----------------
+        if fail_count > 0:
+
+            try:
+                email_alert = EmailAlert(
+                    EMAIL_SMTP,
+                    EMAIL_PORT,
+                    EMAIL_USER,
+                    EMAIL_PASSWORD,
+                    EMAIL_RECIPIENTS
+                )
+
+                email_alert.send_failure_summary(
+                    rules_executed,
+                    pass_count,
+                    fail_count
+                )
+
+                logger.info("Failure summary email sent")
+
+            except Exception as e:
+                logger.error(f"Email alert failed: {str(e)}")

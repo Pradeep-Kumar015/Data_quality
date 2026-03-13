@@ -1,0 +1,18 @@
+# Snowflake Snowpark
+snowflake-snowpark-python>=1.15.0
+
+# Airflow
+apache-airflow>=3.1.8
+
+# Airflow Providers
+apache-airflow-providers-standard>=1.12.0
+apache-airflow-providers-smtp>=2.4.2
+
+# HTTP requests (for Teams alerts)
+requests>=2.31.0
+
+# Environment variable support
+python-dotenv>=1.0.1
+
+# Optional but useful
+pandas>=2.2.0
