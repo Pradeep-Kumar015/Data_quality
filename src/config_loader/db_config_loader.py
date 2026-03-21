@@ -1,4 +1,5 @@
 from snowflake.snowpark.functions import col
+from src.checks import completeness, uniqueness, validity, min_length
 
 
 class DBConfigLoader:
@@ -17,9 +18,9 @@ class DBConfigLoader:
 
     def load_rule_lookup(self):
 
-        rows = self.session.table("DEMO_DB.PUBLIC.DQ_RULES").collect()
-
         return {
-            r["RULE_ID"]: r["RULE_NAME"]
-            for r in rows
+            "DQ_001": completeness.execute,
+            "DQ_002": uniqueness.execute,
+            "DQ_003": validity.execute,
+            "DQ_004": min_length.execute
         }

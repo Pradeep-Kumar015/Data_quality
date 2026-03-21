@@ -1,11 +1,11 @@
-from connectors.snowflake_connector import SnowflakeConnector
-from config_loader.db_config_loader import DBConfigLoader
-from core.dq_engine import DQEngine
+from src.connectors.snowflake_connector import SnowflakeConnector
+from src.config_loader.db_config_loader import DBConfigLoader
+from src.core.dq_engine import DQEngine
 
-from alerts.teams_alert import TeamsAlert
-from alerts.email_alert import EmailAlert
+from src.alerts.teams_alert import TeamsAlert
+from src.alerts.email_alert import EmailAlert
 
-from utils.logger import get_logger
+from src.utils.logger import get_logger
 
 from dotenv import load_dotenv
 import os
@@ -24,7 +24,9 @@ EMAIL_PORT = int(os.getenv("EMAIL_PORT", 587))
 EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 
-EMAIL_RECIPIENTS = os.getenv("EMAIL_RECIPIENTS", "").split(",")
+EMAIL_RECIPIENTS = [
+    email.strip() for email in os.getenv("EMAIL_RECIPIENTS", "").split(",") if email.strip()
+]
 
 
 class DQRunner:
@@ -47,7 +49,6 @@ class DQRunner:
             config_loader = DBConfigLoader(session)
 
             dq_config_df = config_loader.load_active_rules()
-
             rule_lookup = config_loader.load_rule_lookup()
 
             logger.info("DQ configuration loaded")
@@ -57,35 +58,44 @@ class DQRunner:
             raise
 
         # ---------------- EXECUTE ENGINE ----------------
-        engine = DQEngine(
-            session,
-            rule_lookup,
-            TEAMS_WEBHOOK
-        )
-
-        tables_checked, rules_executed, pass_count, fail_count = \
-            engine.execute(dq_config_df)
-
-        logger.info("DQ execution finished")
-
-        # ---------------- TEAMS SUMMARY ALERT ----------------
         try:
-            teams_alert = TeamsAlert(TEAMS_WEBHOOK)
-
-            teams_alert.send_summary_alert(
-                tables_checked,
-                rules_executed,
-                pass_count,
-                fail_count
+            engine = DQEngine(
+                session,
+                rule_lookup,
+                TEAMS_WEBHOOK
             )
 
-            logger.info("Teams summary alert sent")
+            tables_checked, rules_executed, pass_count, fail_count = \
+                engine.execute(dq_config_df)
+
+            logger.info("DQ execution finished")
 
         except Exception as e:
-            logger.error(f"Teams alert failed: {str(e)}")
+            logger.error(f"DQ execution failed: {str(e)}")
+            raise
+
+        # ---------------- TEAMS SUMMARY ALERT ----------------
+        if TEAMS_WEBHOOK:
+            try:
+                teams_alert = TeamsAlert(TEAMS_WEBHOOK)
+
+                teams_alert.send_summary_alert(
+                    tables_checked,
+                    rules_executed,
+                    pass_count,
+                    fail_count
+                )
+
+                logger.info("Teams summary alert sent")
+
+            except Exception as e:
+                logger.error(f"Teams alert failed: {str(e)}")
+
+        else:
+            logger.warning("TEAMS_WEBHOOK not configured, skipping Teams alert")
 
         # ---------------- EMAIL FAILURE ALERT ----------------
-        if fail_count > 0:
+        if fail_count > 0 and EMAIL_SMTP and EMAIL_USER and EMAIL_PASSWORD and EMAIL_RECIPIENTS:
 
             try:
                 email_alert = EmailAlert(
@@ -106,3 +116,10 @@ class DQRunner:
 
             except Exception as e:
                 logger.error(f"Email alert failed: {str(e)}")
+
+        else:
+            if fail_count > 0:
+                logger.warning("Email config missing, skipping email alert")
+
+        # ✅ IMPORTANT: RETURN VALUES (fixes your error)
+        return tables_checked, rules_executed, pass_count, fail_count

@@ -1,106 +1,137 @@
 from datetime import datetime
-from snowflake.snowpark.functions import col, current_date
-
-from checks import completeness, uniqueness, validity
-from reporting.report_generator import ReportGenerator
-from utils.logger import get_logger
-
+from collections import defaultdict
+from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
 class DQEngine:
 
-    def __init__(self, session, rule_lookup):
+    def __init__(self, session, rule_lookup, teams_webhook=None):
         self.session = session
         self.rule_lookup = rule_lookup
-        self.reporter = ReportGenerator(session)
+
+        from src.reporting.report_generator import ReportGenerator
+        self.reporter = ReportGenerator(session, teams_webhook)
 
     def execute(self, dq_config_df):
 
-        table_groups = {}
+        tables_checked = 0
+        rules_executed = 0
+        pass_count = 0
+        fail_count = 0
 
-        logger.info("Grouping rules by table")
+        processed_tables = {}
 
-        for row in dq_config_df.to_local_iterator():
+        # ✅ STEP 1: GROUP RULES
+        grouped_rules = defaultdict(list)
 
-            table_key = (
-                row["DATABASE_NAME"],
-                row["SCHEMA_NAME"],
-                row["TABLE_NAME"]
+        rows = dq_config_df.collect()
+
+        for row in rows:
+            row_dict = {k.upper(): v for k, v in row.as_dict().items()}
+
+            if "COLUMN_NAMES" in row_dict:
+                row_dict["COLUMN_NAME"] = row_dict["COLUMN_NAMES"]
+
+            key = (
+                row_dict.get("DATABASE_NAME"),
+                row_dict.get("SCHEMA_NAME"),
+                row_dict.get("TABLE_NAME"),
+                row_dict.get("RULE_ID")
             )
 
-            table_groups.setdefault(table_key, []).append(row)
+            grouped_rules[key].append(row_dict)
 
-        for (database, schema_name, table), rules in table_groups.items():
+        # ✅ STEP 2: PROCESS GROUPS
+        for (database, schema, table, rule_id), rule_rows in grouped_rules.items():
 
-            source_table = f"{database}.{schema_name}.{table}"
+            full_table_name = f"{database}.{schema}.{table}"
 
-            logger.info(f"Processing table: {source_table}")
+            if full_table_name not in processed_tables:
+                logger.info(f"Processing table: {full_table_name}")
 
-            df = self.session.table(source_table).filter(
-                col("LOAD_DATE") == current_date()
-            )
+                df = self.session.table(full_table_name)
+                total_count = df.count()
 
-            total_count = df.count()
+                processed_tables[full_table_name] = (df, total_count)
+                tables_checked += 1
 
-            logger.info(f"Total records for current day: {total_count}")
+                logger.info(f"Total records: {total_count}")
 
-            if total_count == 0:
-                logger.warning(f"No records found for table: {table}")
-                continue
+            df, total_count = processed_tables[full_table_name]
 
-            for row in rules:
+            rule_func = self.rule_lookup.get(rule_id)
 
-                start_time = datetime.now()
+            if not callable(rule_func):
+                raise TypeError(f"Rule function not callable for {rule_id}")
 
-                rule_id = row["RULE_ID"]
-                rule_type = self.rule_lookup.get(rule_id)
+            logger.info(f"Executing grouped rule {rule_id} on table {table}")
 
-                column_name = row["COLUMN_NAMES"]
-                min_val = row["MIN_VALUE"]
-                max_val = row["MAX_VALUE"]
-                threshold = float(row["THRESHOLD"])
-                severity = row["SEVERITY"]
-                executed_by = row["CREATED_BY"]
+            # ✅ Collect all columns for this rule
+            columns = [r["COLUMN_NAME"] for r in rule_rows]
 
-                logger.info(
-                    f"Executing rule {rule_type} on column {column_name}"
-                )
+            start_time = datetime.now()
 
-                if rule_type == "NULL_CHECK":
+            # ✅ STEP 3: EXECUTE ONCE (loop columns but same df)
+            for row_dict in rule_rows:
 
-                    failed_df, failed_count, rule_expression = \
-                        completeness.execute(df, column_name)
+                column_name = row_dict["COLUMN_NAME"]
 
-                elif rule_type == "DUPLICATE_CHECK":
+                try:
+                    threshold = float(row_dict.get("THRESHOLD") or 0.0)
+                except:
+                    threshold = 0.0
 
-                    failed_df, failed_count, rule_expression = \
-                        uniqueness.execute(df, column_name)
+                severity = row_dict.get("SEVERITY", "LOW")
+                min_val = row_dict.get("MIN_VALUE")
+                max_val = row_dict.get("MAX_VALUE")
 
-                elif rule_type == "RANGE_CHECK":
+                logger.info(f"→ Column: {column_name}")
 
-                    failed_df, failed_count, rule_expression = \
-                        validity.execute(df, column_name, min_val, max_val)
+                try:
+                    # Execute rule
+                    if rule_id == "DQ_003":
+                        failed_df, failed_count, rule_expression = \
+                            rule_func(df, column_name, min_val, max_val)
 
-                else:
-                    logger.error(f"Unsupported rule type: {rule_type}")
-                    continue
+                    elif rule_id == "DQ_004":
+                        failed_df, failed_count, rule_expression = \
+                            rule_func(df, column_name, min_val)
 
-                self.reporter.generate_report(
-                    rule_id=rule_id,
-                    rule_type=rule_type,
-                    database=database,
-                    schema=schema_name,
-                    table=table,
-                    column_name=column_name,
-                    rule_expression=rule_expression,
-                    threshold=threshold,
-                    severity=severity,
-                    total_count=total_count,
-                    failed_count=failed_count,
-                    start_time=start_time,
-                    executed_by=executed_by,
-                    source_table=source_table,
-                    failed_df=failed_df
-                )
+                    else:
+                        failed_df, failed_count, rule_expression = \
+                            rule_func(df, column_name)
+
+                    # Report per column
+                    rule_status = self.reporter.generate_report(
+                        rule_id=rule_id,
+                        rule_type=rule_id,
+                        database=database,
+                        schema=schema,
+                        table=table,
+                        column_name=column_name,
+                        rule_expression=rule_expression,
+                        threshold=threshold,
+                        severity=severity,
+                        total_count=total_count,
+                        failed_count=failed_count,
+                        start_time=start_time,
+                        executed_by="DQ_TOOL",
+                        source_table=full_table_name,
+                        failed_df=failed_df
+                    )
+
+                    rules_executed += 1
+
+                    if rule_status == "PASS":
+                        pass_count += 1
+                    elif rule_status == "FAIL":
+                        fail_count += 1
+
+                except Exception as e:
+                    logger.error(f"Error in {rule_id} for {column_name}: {str(e)}")
+                    rules_executed += 1
+                    fail_count += 1
+
+        return tables_checked, rules_executed, pass_count, fail_count
