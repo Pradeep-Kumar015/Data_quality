@@ -31,17 +31,23 @@ class DQEngine:
 
         rows = dq_config_df.collect()
 
-        # ================================
-        # GROUP RULES
-        # ================================
+        # =================================================
+        # STEP 1: GROUP RULES BY TABLE + RULE_ID
+        # =================================================
         for row in rows:
 
-            row_dict = {k.upper(): v for k, v in row.as_dict().items()}
+            row_dict = {
+                k.upper(): v
+                for k, v in row.as_dict().items()
+            }
 
+            # Normalize column name
             if "COLUMN_NAMES" in row_dict:
                 row_dict["COLUMN_NAME"] = row_dict["COLUMN_NAMES"]
 
-            if not row_dict.get("COLUMN_NAME"):
+            column_name = row_dict.get("COLUMN_NAME")
+
+            if not column_name:
                 raise ValueError(
                     f"COLUMN_NAME missing in config: {row_dict}"
                 )
@@ -56,57 +62,71 @@ class DQEngine:
             grouped_rules[key].append(row_dict)
 
 
-        # ================================
-        # EXECUTE RULE GROUPS
-        # ================================
-        for (database, schema, table, rule_id), rule_rows in grouped_rules.items():
+        # =================================================
+        # STEP 2: EXECUTE GROUPED RULES
+        # =================================================
+        for (
+            database,
+            schema,
+            table,
+            rule_id
+        ), rule_rows in grouped_rules.items():
 
             full_table_name = f"{database}.{schema}.{table}"
 
+            # -------------------------------------------------
+            # Load table only once
+            # -------------------------------------------------
             if full_table_name not in processed_tables:
 
-                logger.info(f"Processing table: {full_table_name}")
+                logger.info(
+                    f"Processing table: {full_table_name}"
+                )
 
                 df = self.session.table(full_table_name)
 
-                partition_column = rule_rows[0].get("PARTITION_COLUMN")
+                partition_column = rule_rows[0].get(
+                    "PARTITION_COLUMN"
+                )
 
-                # ==========================================
-                # STRICT PARTITION CHECK (MANDATORY)
-                # ==========================================
+                # =========================================
+                # OPTIONAL PARTITION FILTER (TODAY ONLY)
+                # =========================================
                 if partition_column:
 
                     if partition_column not in df.columns:
-                        raise ValueError(
-                            f"{partition_column} not found in {full_table_name}"
-                        )
-
-                    logger.info(
-                        f"Filtering {full_table_name} "
-                        f"for today's partition using {partition_column}"
-                    )
-
-                    df_today = df.filter(
-                        col(partition_column) == current_date()
-                    )
-
-                    today_count = df_today.count()
-
-                    if today_count == 0:
 
                         logger.warning(
-                            f"No records found for CURRENT_DATE in "
-                            f"{full_table_name}. Skipping table execution."
+                            f"{partition_column} not found in "
+                            f"{full_table_name}. Skipping partition filter."
                         )
 
-                        # ❌ HARD STOP
-                        continue
+                    else:
 
-                    df = df_today
+                        logger.info(
+                            f"Filtering {full_table_name} using "
+                            f"{partition_column} = CURRENT_DATE"
+                        )
+
+                        df = df.filter(
+                            col(partition_column) == current_date()
+                        )
 
                 total_count = df.count()
 
-                processed_tables[full_table_name] = (df, total_count)
+                if total_count == 0:
+
+                    logger.warning(
+                        f"No records available for validation in "
+                        f"{full_table_name}. Skipping table."
+                    )
+
+                    continue
+
+                processed_tables[full_table_name] = (
+                    df,
+                    total_count
+                )
 
                 tables_checked += 1
 
@@ -114,27 +134,27 @@ class DQEngine:
                     f"Rows available for validation: {total_count}"
                 )
 
-
-            df, total_count = processed_tables[full_table_name]
+            df, total_count = processed_tables[
+                full_table_name
+            ]
 
             rule_func = self.rule_lookup.get(rule_id)
 
             if not callable(rule_func):
 
-                raise TypeError(
-                    f"Rule function not callable for {rule_id}"
+                logger.error(
+                    f"Rule function missing for {rule_id}"
                 )
 
-            start_time = datetime.now()
+                continue
 
             logger.info(
-                f"Executing rule {rule_id} on table {table}"
+                f"Executing grouped rule {rule_id} on table {table}"
             )
 
-
-            # ==========================================
-            # EXECUTE RULES PER COLUMN
-            # ==========================================
+            # =================================================
+            # STEP 3: EXECUTE RULE PER COLUMN
+            # =================================================
             for row_dict in rule_rows:
 
                 column_name = row_dict["COLUMN_NAME"]
@@ -148,20 +168,21 @@ class DQEngine:
                 min_val = row_dict.get("MIN_VALUE")
                 max_val = row_dict.get("MAX_VALUE")
 
+                start_time = datetime.now()
+
                 try:
 
-                    rule_params = [
-                        p for p in [
-                            column_name,
-                            min_val,
-                            max_val
-                        ]
-                        if p is not None
-                    ]
+                    # Dynamically pass parameters
+                    params = [column_name]
+
+                    if min_val is not None:
+                        params.append(min_val)
+
+                    if max_val is not None:
+                        params.append(max_val)
 
                     failed_df, failed_count, rule_expression = \
-                        rule_func(df, *rule_params)
-
+                        rule_func(df, *params)
 
                     rule_status = self.reporter.generate_report(
                         rule_id=rule_id,
@@ -191,13 +212,17 @@ class DQEngine:
                 except Exception as e:
 
                     logger.error(
-                        f"Error executing {rule_id} on {column_name}: {str(e)}"
+                        f"Error executing {rule_id} on "
+                        f"{column_name}: {str(e)}"
                     )
 
                     rules_executed += 1
                     fail_count += 1
 
 
+        # =================================================
+        # STEP 4: RETURN SUMMARY METRICS
+        # =================================================
         return (
             tables_checked,
             rules_executed,

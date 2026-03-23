@@ -12,7 +12,6 @@ class ReportGenerator:
 
         self.session = session
 
-        # Initialize Teams alert handler
         self.teams_alert = (
             TeamsAlert(teams_webhook)
             if teams_webhook
@@ -39,7 +38,7 @@ class ReportGenerator:
         failed_df
     ):
 
-        end_time = datetime.now()
+        execution_timestamp = datetime.now()
 
         threshold = float(threshold or 0.0)
 
@@ -55,34 +54,27 @@ class ReportGenerator:
         rule_status = "FAIL" if is_threshold_breached else "PASS"
 
         execution_duration = int(
-            (end_time - start_time).total_seconds()
+            (execution_timestamp - start_time).total_seconds()
         )
 
 
         # --------------------------------------------------
-        # Extract failed sample safely (VARIANT compatible)
+        # Extract failed sample safely (Snowflake VARIANT safe)
         # --------------------------------------------------
         try:
 
-            failed_sample = failed_df.limit(5).collect()
+            failed_sample_rows = failed_df.limit(5).collect()
 
             def serialize_row(row):
 
-                serialized = {}
-
-                for k, v in row.as_dict().items():
-
-                    if isinstance(v, (date, datetime)):
-                        serialized[k] = str(v)
-
-                    else:
-                        serialized[k] = v
-
-                return serialized
+                return {
+                    k: str(v) if isinstance(v, (date, datetime)) else v
+                    for k, v in row.as_dict().items()
+                }
 
             failed_sample_json = [
                 serialize_row(row)
-                for row in failed_sample
+                for row in failed_sample_rows
             ]
 
         except Exception as e:
@@ -92,6 +84,13 @@ class ReportGenerator:
             )
 
             failed_sample_json = []
+
+
+        # --------------------------------------------------
+        # Optional metadata capture (future-ready)
+        # --------------------------------------------------
+        query_id = None
+        warehouse_name = None
 
 
         # --------------------------------------------------
@@ -115,10 +114,10 @@ class ReportGenerator:
             "RULE_STATUS": rule_status,
             "IS_THRESHOLD_BREACHED": is_threshold_breached,
             "START_TIME": start_time,
-            "END_TIME": end_time,
+            "END_TIME": execution_timestamp,
             "EXECUTION_DURATION_SEC": execution_duration,
-            "QUERY_ID": None,
-            "WAREHOUSE_NAME": None,
+            "QUERY_ID": query_id,
+            "WAREHOUSE_NAME": warehouse_name,
             "SOURCE_TYPE": "SNOWFLAKE",
             "SOURCE_LOCATION": source_table,
             "FAILED_SAMPLE_DATA": failed_sample_json,
@@ -126,8 +125,8 @@ class ReportGenerator:
             "IS_ACTIVE": True,
             "EXECUTED_BY": executed_by,
             "EXECUTION_MODE": "BATCH",
-            "CREATED_TIMESTAMP": datetime.now(),
-            "UPDATED_TIMESTAMP": datetime.now()
+            "CREATED_TIMESTAMP": execution_timestamp,
+            "UPDATED_TIMESTAMP": execution_timestamp
         }
 
 
@@ -150,16 +149,20 @@ class ReportGenerator:
         except Exception as e:
 
             logger.error(
-                f"Insert failed: {str(e)}"
+                f"Insert failed for {rule_id} ({column_name}): {str(e)}"
             )
 
             raise
 
 
         # --------------------------------------------------
-        # Send Teams failure alert (per rule)
+        # Send Teams alert (only HIGH severity failures)
         # --------------------------------------------------
-        if rule_status == "FAIL" and self.teams_alert:
+        if (
+            rule_status == "FAIL"
+            and severity.upper() == "HIGH"
+            and self.teams_alert
+        ):
 
             try:
 

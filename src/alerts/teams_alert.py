@@ -1,5 +1,7 @@
+import os
 import requests
 from datetime import datetime
+
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -8,11 +10,17 @@ logger = get_logger(__name__)
 class TeamsAlert:
 
     def __init__(self, webhook_url):
+
+        if not webhook_url:
+            raise ValueError(
+                "Teams webhook URL is missing"
+            )
+
         self.webhook_url = webhook_url
 
 
     # ---------------------------------------------------
-    # FAILURE ALERT (Stylish Adaptive Card)
+    # FAILURE ALERT (Adaptive Card)
     # ---------------------------------------------------
     def send_failure_alert(
         self,
@@ -23,30 +31,50 @@ class TeamsAlert:
         threshold
     ):
 
+        execution_time = datetime.now()
+
+        airflow_context = self._get_airflow_context()
+
         payload = {
+
             "type": "message",
+
             "attachments": [
+
                 {
-                    "contentType": "application/vnd.microsoft.card.adaptive",
+
+                    "contentType":
+                    "application/vnd.microsoft.card.adaptive",
+
                     "content": {
+
                         "$schema":
                         "http://adaptivecards.io/schemas/adaptive-card.json",
+
                         "type": "AdaptiveCard",
+
                         "version": "1.4",
 
                         "body": [
 
                             {
+
                                 "type": "TextBlock",
+
                                 "text":
                                 "🚨 DATA QUALITY RULE FAILURE ALERT",
+
                                 "weight": "Bolder",
+
                                 "size": "Large",
+
                                 "color": "Attention"
                             },
 
                             {
+
                                 "type": "FactSet",
+
                                 "facts": [
 
                                     {
@@ -79,16 +107,22 @@ class TeamsAlert:
                                     {
                                         "title": "Execution Time",
                                         "value":
-                                        str(datetime.now())
-                                    }
+                                        str(execution_time)
+                                    },
+
+                                    *airflow_context
                                 ]
                             },
 
                             {
+
                                 "type": "TextBlock",
+
                                 "text":
                                 "— Data Quality Monitoring Framework",
+
                                 "spacing": "Medium",
+
                                 "isSubtle": True
                             }
                         ]
@@ -101,7 +135,7 @@ class TeamsAlert:
 
 
     # ---------------------------------------------------
-    # SUMMARY ALERT (Stylish Adaptive Card)
+    # SUMMARY ALERT (Adaptive Card)
     # ---------------------------------------------------
     def send_summary_alert(
         self,
@@ -110,6 +144,8 @@ class TeamsAlert:
         pass_count,
         fail_count
     ):
+
+        execution_time = datetime.now()
 
         success_pct = (
             pass_count / rules_executed
@@ -127,34 +163,51 @@ class TeamsAlert:
             else "⚠️ ACTION REQUIRED"
         )
 
+        airflow_context = self._get_airflow_context()
+
         payload = {
+
             "type": "message",
+
             "attachments": [
+
                 {
+
                     "contentType":
                     "application/vnd.microsoft.card.adaptive",
 
                     "content": {
+
                         "$schema":
                         "http://adaptivecards.io/schemas/adaptive-card.json",
 
                         "type": "AdaptiveCard",
+
                         "version": "1.4",
 
                         "body": [
 
                             {
+
                                 "type": "TextBlock",
+
                                 "text":
                                 "📊 DATA QUALITY EXECUTION SUMMARY",
+
                                 "weight": "Bolder",
+
                                 "size": "Large"
                             },
 
                             {
+
                                 "type": "TextBlock",
-                                "text": f"Status: {status}",
+
+                                "text":
+                                f"Status: {status}",
+
                                 "weight": "Bolder",
+
                                 "color":
                                 "Good"
                                 if fail_count == 0
@@ -162,7 +215,9 @@ class TeamsAlert:
                             },
 
                             {
+
                                 "type": "FactSet",
+
                                 "facts": [
 
                                     {
@@ -211,16 +266,22 @@ class TeamsAlert:
                                         "title":
                                         "Execution Time",
                                         "value":
-                                        str(datetime.now())
-                                    }
+                                        str(execution_time)
+                                    },
+
+                                    *airflow_context
                                 ]
                             },
 
                             {
+
                                 "type": "TextBlock",
+
                                 "text":
                                 "— Data Quality Monitoring Framework",
+
                                 "spacing": "Medium",
+
                                 "isSubtle": True
                             }
                         ]
@@ -241,7 +302,8 @@ class TeamsAlert:
 
             response = requests.post(
                 self.webhook_url,
-                json=payload
+                json=payload,
+                timeout=10
             )
 
             response.raise_for_status()
@@ -255,3 +317,37 @@ class TeamsAlert:
             logger.error(
                 f"Teams alert failed: {str(e)}"
             )
+
+
+    # ---------------------------------------------------
+    # AIRFLOW CONTEXT SUPPORT
+    # ---------------------------------------------------
+    def _get_airflow_context(self):
+
+        dag_id = os.getenv("AIRFLOW_CTX_DAG_ID")
+        task_id = os.getenv("AIRFLOW_CTX_TASK_ID")
+        execution_date = os.getenv(
+            "AIRFLOW_CTX_EXECUTION_DATE"
+        )
+
+        context = []
+
+        if dag_id:
+            context.append({
+                "title": "DAG ID",
+                "value": dag_id
+            })
+
+        if task_id:
+            context.append({
+                "title": "Task ID",
+                "value": task_id
+            })
+
+        if execution_date:
+            context.append({
+                "title": "Execution Date",
+                "value": execution_date
+            })
+
+        return context

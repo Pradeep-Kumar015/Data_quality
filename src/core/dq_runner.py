@@ -1,10 +1,9 @@
 from src.connectors.snowflake_connector import SnowflakeConnector
 from src.config_loader.db_config_loader import DBConfigLoader
 from src.core.dq_engine import DQEngine
-
 from src.alerts.teams_alert import TeamsAlert
-
 from src.utils.logger import get_logger
+
 from dotenv import load_dotenv
 import os
 
@@ -27,7 +26,7 @@ class DQRunner:
 
     def run(self):
 
-        logger.info("Starting Data Quality Framework")
+        logger.info("Starting Data Quality Framework execution")
 
         # --------------------------------------------------
         # STEP 1: CREATE SNOWFLAKE SESSION
@@ -57,6 +56,14 @@ class DQRunner:
             config_loader = DBConfigLoader(session)
 
             dq_config_df = config_loader.load_active_rules()
+
+            if dq_config_df.count() == 0:
+
+                logger.warning(
+                    "No active DQ rules found. Skipping execution."
+                )
+
+                return 0, 0, 0, 0
 
             rule_lookup = config_loader.load_rule_lookup()
 
@@ -101,17 +108,15 @@ class DQRunner:
 
 
         # --------------------------------------------------
-        # STEP 4: SEND SUMMARY ALERT
+        # STEP 4: SEND SUMMARY ALERT (OPTIONAL)
         # --------------------------------------------------
-        if TEAMS_WEBHOOK:
+        if TEAMS_WEBHOOK and rules_executed > 0:
 
             try:
 
-                teams_alert = TeamsAlert(
+                TeamsAlert(
                     TEAMS_WEBHOOK
-                )
-
-                teams_alert.send_summary_alert(
+                ).send_summary_alert(
                     tables_checked,
                     rules_executed,
                     pass_count,
@@ -130,13 +135,14 @@ class DQRunner:
 
         else:
 
-            logger.warning(
-                "TEAMS_WEBHOOK not configured"
+            logger.info(
+                "Skipping Teams summary alert "
+                "(webhook missing or no rules executed)"
             )
 
 
         # --------------------------------------------------
-        # STEP 5: RETURN EXECUTION SUMMARY
+        # STEP 5: FINAL EXECUTION SUMMARY
         # --------------------------------------------------
         logger.info(
             "DQ Execution Summary | "
@@ -146,6 +152,10 @@ class DQRunner:
             f"Fail: {fail_count}"
         )
 
+
+        # --------------------------------------------------
+        # STEP 6: RETURN EXECUTION METRICS
+        # --------------------------------------------------
         return (
             tables_checked,
             rules_executed,
