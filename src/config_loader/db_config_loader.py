@@ -1,5 +1,5 @@
 from snowflake.snowpark.functions import col
-from src.checks import completeness, uniqueness, validity, min_length
+from src.checks import completeness, uniqueness, validity
 
 
 class DBConfigLoader:
@@ -21,6 +21,6 @@ class DBConfigLoader:
         return {
             "DQ_001": completeness.execute,
             "DQ_002": uniqueness.execute,
-            "DQ_003": validity.execute,
-            "DQ_004": min_length.execute
+            "DQ_003": validity.execute_range,
+            "DQ_004": validity.execute_min_length
         }

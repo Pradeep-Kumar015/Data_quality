@@ -1,20 +1,24 @@
-from datetime import datetime
-import json
+from datetime import datetime, date
 
+from src.alerts.teams_alert import TeamsAlert
 from src.utils.logger import get_logger
-import os
-from src.alerts.http_alert import HTTPAlert
 
 logger = get_logger(__name__)
 
 
 class ReportGenerator:
-    
-    
 
     def __init__(self, session, teams_webhook=None):
+
         self.session = session
-        self.teams_webhook = teams_webhook  # (not used now, safe)
+
+        # Initialize Teams alert handler
+        self.teams_alert = (
+            TeamsAlert(teams_webhook)
+            if teams_webhook
+            else None
+        )
+
 
     def generate_report(
         self,
@@ -34,40 +38,67 @@ class ReportGenerator:
         source_table,
         failed_df
     ):
-        
-        print("🔥 ENTERED generate_report")
 
         end_time = datetime.now()
 
-        # ✅ Ensure threshold is float
-        try:
-            threshold = float(threshold) if threshold is not None else 0.0
-        except Exception:
-            threshold = 0.0
+        threshold = float(threshold or 0.0)
 
-        # ✅ Calculations
-        passed_count = total_count - failed_count
+        passed_count = max(total_count - failed_count, 0)
 
         failure_percentage = (
-            failed_count / total_count if total_count > 0 else 0.0
+            float(failed_count) / float(total_count)
+            if total_count > 0 else 0.0
         )
 
         is_threshold_breached = failure_percentage > threshold
 
         rule_status = "FAIL" if is_threshold_breached else "PASS"
 
-        execution_duration = int((end_time - start_time).total_seconds())
+        execution_duration = int(
+            (end_time - start_time).total_seconds()
+        )
 
-        # ✅ Handle VARIANT column safely
+
+        # --------------------------------------------------
+        # Extract failed sample safely (VARIANT compatible)
+        # --------------------------------------------------
         try:
+
             failed_sample = failed_df.limit(5).collect()
-            failed_sample_json = [r.as_dict() for r in failed_sample]
+
+            def serialize_row(row):
+
+                serialized = {}
+
+                for k, v in row.as_dict().items():
+
+                    if isinstance(v, (date, datetime)):
+                        serialized[k] = str(v)
+
+                    else:
+                        serialized[k] = v
+
+                return serialized
+
+            failed_sample_json = [
+                serialize_row(row)
+                for row in failed_sample
+            ]
+
         except Exception as e:
-            print("❌ SAMPLE ERROR:", e)
+
+            logger.warning(
+                f"Failed sample extraction error: {str(e)}"
+            )
+
             failed_sample_json = []
 
-        # ✅ Build row (MATCHES YOUR TABLE STRUCTURE)
+
+        # --------------------------------------------------
+        # Prepare result row
+        # --------------------------------------------------
         result_row = {
+
             "RULE_ID": rule_id,
             "RULE_TYPE": rule_type,
             "DATABASE_NAME": database,
@@ -99,31 +130,52 @@ class ReportGenerator:
             "UPDATED_TIMESTAMP": datetime.now()
         }
 
-        # ✅ Insert into Snowflake
+
+        # --------------------------------------------------
+        # Insert into Snowflake result table
+        # --------------------------------------------------
         try:
-            df = self.session.create_dataframe([result_row])
-            
-            print("🔥 BEFORE INSERT")
 
             df = self.session.create_dataframe([result_row])
-
-            print("🔥 DF CREATED")
-
 
             df.write.mode("append").save_as_table(
                 "DEMO_DB.PUBLIC.DQ_RESULT_TABLE",
                 column_order="name"
             )
-            
-            print("🔥 AFTER INSERT")
 
-            logger.info(f"INSERT SUCCESS → {rule_id}")
+            logger.info(
+                f"INSERT SUCCESS → {rule_id} ({column_name})"
+            )
 
         except Exception as e:
-            logger.error(f"INSERT FAILED → {str(e)}")
+
+            logger.error(
+                f"Insert failed: {str(e)}"
+            )
+
             raise
 
-        # ✅ Log result
-        logger.info(f"{table}.{column_name} | {rule_type} | {rule_status}")
+
+        # --------------------------------------------------
+        # Send Teams failure alert (per rule)
+        # --------------------------------------------------
+        if rule_status == "FAIL" and self.teams_alert:
+
+            try:
+
+                self.teams_alert.send_failure_alert(
+                    table,
+                    column_name,
+                    rule_type,
+                    failure_percentage,
+                    threshold
+                )
+
+            except Exception as e:
+
+                logger.error(
+                    f"Teams failure alert failed: {str(e)}"
+                )
+
 
         return rule_status

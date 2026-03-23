@@ -1,4 +1,5 @@
 import requests
+from datetime import datetime
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -10,50 +11,98 @@ class TeamsAlert:
         self.webhook_url = webhook_url
 
 
-    def send_message(self, message):
-
-        payload = {"text": message}
-
-        try:
-
-            response = requests.post(
-                self.webhook_url,
-                json=payload
-            )
-
-            if response.status_code == 200:
-                logger.info("Teams alert sent successfully")
-
-            else:
-                logger.error("Teams alert failed")
-
-        except Exception as e:
-            logger.error(str(e))
-
-
+    # ---------------------------------------------------
+    # FAILURE ALERT (Stylish Adaptive Card)
+    # ---------------------------------------------------
     def send_failure_alert(
         self,
         table,
         column,
-        rule_type,
+        rule,
         failure_percentage,
         threshold
     ):
 
-        message = f"""
-🚨 Data Quality Failure
+        payload = {
+            "type": "message",
+            "attachments": [
+                {
+                    "contentType": "application/vnd.microsoft.card.adaptive",
+                    "content": {
+                        "$schema":
+                        "http://adaptivecards.io/schemas/adaptive-card.json",
+                        "type": "AdaptiveCard",
+                        "version": "1.4",
 
-Table : {table}
-Column : {column}
-Rule : {rule_type}
+                        "body": [
 
-Failure % : {round(failure_percentage,4)}
-Threshold : {threshold}
-"""
+                            {
+                                "type": "TextBlock",
+                                "text":
+                                "🚨 DATA QUALITY RULE FAILURE ALERT",
+                                "weight": "Bolder",
+                                "size": "Large",
+                                "color": "Attention"
+                            },
 
-        self.send_message(message)
+                            {
+                                "type": "FactSet",
+                                "facts": [
+
+                                    {
+                                        "title": "Table",
+                                        "value": table
+                                    },
+
+                                    {
+                                        "title": "Column",
+                                        "value": column
+                                    },
+
+                                    {
+                                        "title": "Rule",
+                                        "value": rule
+                                    },
+
+                                    {
+                                        "title": "Failure %",
+                                        "value":
+                                        f"{failure_percentage:.2%}"
+                                    },
+
+                                    {
+                                        "title": "Threshold",
+                                        "value":
+                                        f"{threshold:.2%}"
+                                    },
+
+                                    {
+                                        "title": "Execution Time",
+                                        "value":
+                                        str(datetime.now())
+                                    }
+                                ]
+                            },
+
+                            {
+                                "type": "TextBlock",
+                                "text":
+                                "— Data Quality Monitoring Framework",
+                                "spacing": "Medium",
+                                "isSubtle": True
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+
+        self._send(payload)
 
 
+    # ---------------------------------------------------
+    # SUMMARY ALERT (Stylish Adaptive Card)
+    # ---------------------------------------------------
     def send_summary_alert(
         self,
         tables_checked,
@@ -62,14 +111,147 @@ Threshold : {threshold}
         fail_count
     ):
 
-        message = f"""
-📊 Data Quality Execution Summary
+        success_pct = (
+            pass_count / rules_executed
+            if rules_executed else 0
+        )
 
-Tables Checked : {tables_checked}
-Rules Executed : {rules_executed}
+        failure_pct = (
+            fail_count / rules_executed
+            if rules_executed else 0
+        )
 
-PASS : {pass_count}
-FAIL : {fail_count}
-"""
+        status = (
+            "✅ ALL RULES PASSED"
+            if fail_count == 0
+            else "⚠️ ACTION REQUIRED"
+        )
 
-        self.send_message(message)
+        payload = {
+            "type": "message",
+            "attachments": [
+                {
+                    "contentType":
+                    "application/vnd.microsoft.card.adaptive",
+
+                    "content": {
+                        "$schema":
+                        "http://adaptivecards.io/schemas/adaptive-card.json",
+
+                        "type": "AdaptiveCard",
+                        "version": "1.4",
+
+                        "body": [
+
+                            {
+                                "type": "TextBlock",
+                                "text":
+                                "📊 DATA QUALITY EXECUTION SUMMARY",
+                                "weight": "Bolder",
+                                "size": "Large"
+                            },
+
+                            {
+                                "type": "TextBlock",
+                                "text": f"Status: {status}",
+                                "weight": "Bolder",
+                                "color":
+                                "Good"
+                                if fail_count == 0
+                                else "Warning"
+                            },
+
+                            {
+                                "type": "FactSet",
+                                "facts": [
+
+                                    {
+                                        "title":
+                                        "Tables Checked",
+                                        "value":
+                                        str(tables_checked)
+                                    },
+
+                                    {
+                                        "title":
+                                        "Rules Executed",
+                                        "value":
+                                        str(rules_executed)
+                                    },
+
+                                    {
+                                        "title":
+                                        "Rules Passed",
+                                        "value":
+                                        str(pass_count)
+                                    },
+
+                                    {
+                                        "title":
+                                        "Rules Failed",
+                                        "value":
+                                        str(fail_count)
+                                    },
+
+                                    {
+                                        "title":
+                                        "Success %",
+                                        "value":
+                                        f"{success_pct:.2%}"
+                                    },
+
+                                    {
+                                        "title":
+                                        "Failure %",
+                                        "value":
+                                        f"{failure_pct:.2%}"
+                                    },
+
+                                    {
+                                        "title":
+                                        "Execution Time",
+                                        "value":
+                                        str(datetime.now())
+                                    }
+                                ]
+                            },
+
+                            {
+                                "type": "TextBlock",
+                                "text":
+                                "— Data Quality Monitoring Framework",
+                                "spacing": "Medium",
+                                "isSubtle": True
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+
+        self._send(payload)
+
+
+    # ---------------------------------------------------
+    # INTERNAL SEND METHOD
+    # ---------------------------------------------------
+    def _send(self, payload):
+
+        try:
+
+            response = requests.post(
+                self.webhook_url,
+                json=payload
+            )
+
+            response.raise_for_status()
+
+            logger.info(
+                "Teams alert sent successfully"
+            )
+
+        except Exception as e:
+
+            logger.error(
+                f"Teams alert failed: {str(e)}"
+            )
