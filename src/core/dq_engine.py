@@ -24,9 +24,9 @@ class DQEngine:
         rules_executed = 0
         pass_count = 0
         fail_count = 0
+        critical_fail_count = 0
 
         processed_tables = {}
-
         grouped_rules = defaultdict(list)
 
         rows = dq_config_df.collect()
@@ -41,13 +41,14 @@ class DQEngine:
                 for k, v in row.as_dict().items()
             }
 
-            # Normalize column name
             if "COLUMN_NAMES" in row_dict:
                 row_dict["COLUMN_NAME"] = row_dict["COLUMN_NAMES"]
 
+            rule_id = row_dict.get("RULE_ID")
             column_name = row_dict.get("COLUMN_NAME")
 
-            if not column_name:
+            if rule_id != "DQ_005" and not column_name:
+
                 raise ValueError(
                     f"COLUMN_NAME missing in config: {row_dict}"
                 )
@@ -56,7 +57,7 @@ class DQEngine:
                 row_dict["DATABASE_NAME"],
                 row_dict["SCHEMA_NAME"],
                 row_dict["TABLE_NAME"],
-                row_dict["RULE_ID"]
+                rule_id
             )
 
             grouped_rules[key].append(row_dict)
@@ -75,23 +76,16 @@ class DQEngine:
             full_table_name = f"{database}.{schema}.{table}"
 
             # -------------------------------------------------
-            # Load table only once
+            # LOAD TABLE ONLY ONCE
             # -------------------------------------------------
             if full_table_name not in processed_tables:
 
-                logger.info(
-                    f"Processing table: {full_table_name}"
-                )
+                logger.info(f"Processing table: {full_table_name}")
 
                 df = self.session.table(full_table_name)
 
-                partition_column = rule_rows[0].get(
-                    "PARTITION_COLUMN"
-                )
+                partition_column = rule_rows[0].get("PARTITION_COLUMN")
 
-                # =========================================
-                # OPTIONAL PARTITION FILTER (TODAY ONLY)
-                # =========================================
                 if partition_column:
 
                     if partition_column not in df.columns:
@@ -134,36 +128,42 @@ class DQEngine:
                     f"Rows available for validation: {total_count}"
                 )
 
-            df, total_count = processed_tables[
-                full_table_name
-            ]
+            df, total_count = processed_tables[full_table_name]
 
-            rule_func = self.rule_lookup.get(rule_id)
+            # =================================================
+            # LOAD RULE METADATA (func + name)
+            # =================================================
+            rule_metadata = self.rule_lookup.get(rule_id)
 
-            if not callable(rule_func):
+            if not rule_metadata:
 
                 logger.error(
-                    f"Rule function missing for {rule_id}"
+                    f"Rule metadata missing for {rule_id}"
                 )
 
                 continue
 
+            rule_func = rule_metadata["func"]
+            rule_name = rule_metadata["name"]
+
             logger.info(
-                f"Executing grouped rule {rule_id} on table {table}"
+                f"Executing grouped rule {rule_name} on table {table}"
             )
 
             # =================================================
-            # STEP 3: EXECUTE RULE PER COLUMN
+            # STEP 3: EXECUTE RULES
             # =================================================
             for row_dict in rule_rows:
 
-                column_name = row_dict["COLUMN_NAME"]
+                column_name = row_dict.get("COLUMN_NAME")
 
                 threshold = float(
                     row_dict.get("THRESHOLD") or 0.0
                 )
 
-                severity = row_dict.get("SEVERITY", "LOW")
+                severity = (
+                    row_dict.get("SEVERITY", "LOW").upper()
+                )
 
                 min_val = row_dict.get("MIN_VALUE")
                 max_val = row_dict.get("MAX_VALUE")
@@ -172,25 +172,56 @@ class DQEngine:
 
                 try:
 
-                    # Dynamically pass parameters
-                    params = [column_name]
+                    # -----------------------------------------
+                    # CUSTOM SQL RULE EXECUTION
+                    # -----------------------------------------
+                    if rule_id == "DQ_005":
 
-                    if min_val is not None:
-                        params.append(min_val)
+                        custom_sql = row_dict.get("CUSTOM_SQL")
 
-                    if max_val is not None:
-                        params.append(max_val)
+                        if not custom_sql:
 
-                    failed_df, failed_count, rule_expression = \
-                        rule_func(df, *params)
+                            raise ValueError(
+                                f"CUSTOM_SQL missing for rule {rule_id}"
+                            )
 
+                        logger.info(
+                            f"Executing CUSTOM SQL rule on {table}"
+                        )
+
+                        failed_df, failed_count, rule_expression = \
+                            rule_func(self.session, custom_sql)
+
+                        column_name_for_report = "CUSTOM_SQL"
+
+                    # -----------------------------------------
+                    # STANDARD COLUMN RULE EXECUTION
+                    # -----------------------------------------
+                    else:
+
+                        params = [column_name]
+
+                        if min_val is not None:
+                            params.append(min_val)
+
+                        if max_val is not None:
+                            params.append(max_val)
+
+                        failed_df, failed_count, rule_expression = \
+                            rule_func(df, *params)
+
+                        column_name_for_report = column_name
+
+                    # -----------------------------------------
+                    # WRITE RESULT
+                    # -----------------------------------------
                     rule_status = self.reporter.generate_report(
                         rule_id=rule_id,
-                        rule_type=rule_id,
+                        rule_type=rule_name,   # ✅ FIXED HERE
                         database=database,
                         schema=schema,
                         table=table,
-                        column_name=column_name,
+                        column_name=column_name_for_report,
                         rule_expression=rule_expression,
                         threshold=threshold,
                         severity=severity,
@@ -205,14 +236,21 @@ class DQEngine:
                     rules_executed += 1
 
                     if rule_status == "PASS":
+
                         pass_count += 1
+
                     else:
+
                         fail_count += 1
+
+                        if severity == "HIGH":
+
+                            critical_fail_count += 1
 
                 except Exception as e:
 
                     logger.error(
-                        f"Error executing {rule_id} on "
+                        f"Error executing {rule_name} on "
                         f"{column_name}: {str(e)}"
                     )
 
@@ -227,5 +265,6 @@ class DQEngine:
             tables_checked,
             rules_executed,
             pass_count,
-            fail_count
+            fail_count,
+            critical_fail_count
         )

@@ -1,10 +1,14 @@
+import sys
+from datetime import datetime, timedelta
+
+# ---------------------------------------------------
+# ADD PROJECT ROOT PATH (IMPORTANT)
+# Allows Airflow to find your DQ framework modules
+# ---------------------------------------------------
+sys.path.append("/Users/206909593/DQ")
+
 from airflow import DAG
 from airflow.providers.standard.operators.python import PythonOperator
-from datetime import datetime, timedelta
-import sys
-
-# Add your DQ project path so Airflow can import your framework
-sys.path.append("/Users/206909593/DQ")
 
 from src.core.dq_runner import DQRunner
 
@@ -15,13 +19,9 @@ from src.core.dq_runner import DQRunner
 default_args = {
 
     "owner": "data_quality_team",
-
     "depends_on_past": False,
-
     "retries": 1,
-
     "retry_delay": timedelta(minutes=5),
-
     "execution_timeout": timedelta(minutes=30)
 }
 
@@ -33,13 +33,19 @@ def run_dq():
 
     runner = DQRunner()
 
-    tables_checked, rules_executed, pass_count, fail_count = runner.run()
+    (
+        tables_checked,
+        rules_executed,
+        pass_count,
+        fail_count,
+        critical_fail_count
+    ) = runner.run()
 
-    # Fail DAG if rules fail
-    if fail_count > 0:
+    # Fail DAG only if HIGH severity rules fail
+    if critical_fail_count > 0:
 
         raise Exception(
-            f"DQ validation failed | Failed rules: {fail_count}"
+            f"DQ validation failed | Critical failed rules: {critical_fail_count}"
         )
 
 
@@ -56,7 +62,7 @@ with DAG(
 
     schedule="@daily",
 
-    start_date=datetime(2026, 3, 13),  # ✅ Airflow 3 compatible
+    start_date=datetime(2026, 3, 13),
 
     catchup=False,
 

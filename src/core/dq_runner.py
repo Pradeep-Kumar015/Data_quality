@@ -63,7 +63,7 @@ class DQRunner:
                     "No active DQ rules found. Skipping execution."
                 )
 
-                return 0, 0, 0, 0
+                return 0, 0, 0, 0, 0
 
             rule_lookup = config_loader.load_rule_lookup()
 
@@ -85,14 +85,17 @@ class DQRunner:
         # --------------------------------------------------
         try:
 
-            engine = DQEngine(
+            (
+                tables_checked,
+                rules_executed,
+                pass_count,
+                fail_count,
+                critical_fail_count
+            ) = DQEngine(
                 session=session,
                 rule_lookup=rule_lookup,
                 teams_webhook=TEAMS_WEBHOOK
-            )
-
-            tables_checked, rules_executed, pass_count, fail_count = \
-                engine.execute(dq_config_df)
+            ).execute(dq_config_df)
 
             logger.info(
                 "DQ execution completed successfully"
@@ -124,7 +127,7 @@ class DQRunner:
                 )
 
                 logger.info(
-                    "Teams summary alert sent successfully"
+                    "Teams summary alert sent successfully 📊"
                 )
 
             except Exception as e:
@@ -149,7 +152,8 @@ class DQRunner:
             f"Tables: {tables_checked}, "
             f"Rules: {rules_executed}, "
             f"Pass: {pass_count}, "
-            f"Fail: {fail_count}"
+            f"Fail: {fail_count}, "
+            f"Critical Fail: {critical_fail_count}"
         )
 
 
@@ -160,5 +164,6 @@ class DQRunner:
             tables_checked,
             rules_executed,
             pass_count,
-            fail_count
+            fail_count,
+            critical_fail_count
         )

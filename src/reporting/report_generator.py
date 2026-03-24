@@ -40,6 +40,8 @@ class ReportGenerator:
 
         execution_timestamp = datetime.now()
 
+        severity = (severity or "LOW").upper()
+
         threshold = float(threshold or 0.0)
 
         passed_count = max(total_count - failed_count, 0)
@@ -156,29 +158,35 @@ class ReportGenerator:
 
 
         # --------------------------------------------------
-        # Send Teams alert (only HIGH severity failures)
+        # Send Teams alert (ONLY HIGH severity failures)
         # --------------------------------------------------
-        if (
-            rule_status == "FAIL"
-            and severity.upper() == "HIGH"
-            and self.teams_alert
-        ):
+        if rule_status == "FAIL":
 
-            try:
+            logger.warning(
+                f"Rule FAILED → {rule_id} | {table}.{column_name} | Severity={severity}"
+            )
 
-                self.teams_alert.send_failure_alert(
-                    table,
-                    column_name,
-                    rule_type,
-                    failure_percentage,
-                    threshold
-                )
+            if severity == "HIGH" and self.teams_alert:
 
-            except Exception as e:
+                try:
 
-                logger.error(
-                    f"Teams failure alert failed: {str(e)}"
-                )
+                    self.teams_alert.send_failure_alert(
+                        table,
+                        column_name,
+                        rule_type,
+                        failure_percentage,
+                        threshold
+                    )
+
+                    logger.info(
+                        "🚨 Teams HIGH severity alert sent successfully"
+                    )
+
+                except Exception as e:
+
+                    logger.error(
+                        f"Teams failure alert failed: {str(e)}"
+                    )
 
 
         return rule_status
