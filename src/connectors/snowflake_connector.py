@@ -10,10 +10,13 @@ class SnowflakeConnector:
         # --------------------------------------------------
         # Resolve connection file path dynamically
         # --------------------------------------------------
+        # conn_file_path = os.getenv(
+        #     "SNOWFLAKE_CONN_FILE",
+        #     "/Users/206909593/DQ/connection/conn.json"
+        # )
         conn_file_path = os.getenv(
-            "SNOWFLAKE_CONN_FILE",
-            "/Users/206909593/DQ/connection/conn.json"
-        )
+             "SNOWFLAKE_CONN_FILE",
+             "./connection/conn.json")
 
         # --------------------------------------------------
         # Validate file existence
