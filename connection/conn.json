@@ -1,9 +1,10 @@
 {
-    "account": "RLZHATL-EX67464",
-    "user": "pradeepsurfzz",
+    "account": "LDICCOD-UA23736",
+    "user": "DQM_SERVICE",
     "password": "Pradeepsurfer@1995",
-    "role": "ACCOUNTADMIN",
+    "role": "SYSADMIN",
     "warehouse": "COMPUTE_WH",
     "database": "DEMO_DB",
-    "schema": "PUBLIC"
+    "schema": "PUBLIC",
+    "private_key_file": "/Users/206909593/DQ/keys/rsa_key.p8"
 }

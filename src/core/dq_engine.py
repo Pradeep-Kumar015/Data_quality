@@ -320,32 +320,46 @@ class DQEngine:
     # =================================================
     def log_execution(self, database, schema, table, rule_id, config_id, column_name, status):
 
+        # Handle NULL CONFIG_ID
+        config_id_value = "NULL" if config_id is None else config_id
+
         insert_sql = f"""
             INSERT INTO DEMO_DB.PUBLIC.DQ_EXECUTION_LOG
-            SELECT *
-            FROM (
-                SELECT
-                    '{database}' AS DATABASE_NAME,
-                    '{schema}' AS SCHEMA_NAME,
-                    '{table}' AS TABLE_NAME,
-                    '{rule_id}' AS RULE_ID,
-                    '{config_id}' AS CONFIG_ID,
-                    '{column_name}' AS COLUMN_NAME,
-                    CURRENT_DATE() AS RUN_DATE,
-                    '{status}' AS STATUS,
-                    CURRENT_TIMESTAMP() AS LAST_RUN_TIME
-            ) t
+            (
+                DATABASE_NAME,
+                SCHEMA_NAME,
+                TABLE_NAME,
+                RULE_ID,
+                CONFIG_ID,
+                COLUMN_NAME,
+                RUN_DATE,
+                STATUS,
+                LAST_RUN_TIME
+            )
+            SELECT
+                '{database}',
+                '{schema}',
+                '{table}',
+                '{rule_id}',
+                {config_id_value},
+                '{column_name}',
+                CURRENT_DATE(),
+                '{status}',
+                CURRENT_TIMESTAMP()
             WHERE NOT EXISTS (
                 SELECT 1
                 FROM DEMO_DB.PUBLIC.DQ_EXECUTION_LOG d
-                WHERE d.DATABASE_NAME = t.DATABASE_NAME
-                  AND d.SCHEMA_NAME = t.SCHEMA_NAME
-                  AND d.TABLE_NAME = t.TABLE_NAME
-                  AND d.RULE_ID = t.RULE_ID
-                  AND d.CONFIG_ID = t.CONFIG_ID
-                  AND d.COLUMN_NAME = t.COLUMN_NAME
-                  AND d.RUN_DATE = CURRENT_DATE()
-                  AND d.STATUS = 'PASS'
+                WHERE d.DATABASE_NAME = '{database}'
+                AND d.SCHEMA_NAME = '{schema}'
+                AND d.TABLE_NAME = '{table}'
+                AND d.RULE_ID = '{rule_id}'
+                AND (
+                        d.CONFIG_ID = {config_id_value}
+                        OR ({config_id_value} IS NULL AND d.CONFIG_ID IS NULL)
+                    )
+                AND d.COLUMN_NAME = '{column_name}'
+                AND d.RUN_DATE = CURRENT_DATE()
+                AND d.STATUS = 'PASS'
             )
         """
 
