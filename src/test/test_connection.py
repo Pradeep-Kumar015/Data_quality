@@ -24,13 +24,6 @@ def main():
 
         row = result[0]
 
-        print("\n===== Snowflake Session Details =====")
-        print(f"User       : {row[0]}")
-        print(f"Role       : {row[1]}")
-        print(f"Warehouse  : {row[2]}")
-        print(f"Database   : {row[3]}")
-        print(f"Schema     : {row[4]}")
-
         session.close()
 
         print("\n✅ Session Closed Successfully")

@@ -1,0 +1,32 @@
+[
+  {
+    "RULE_ID": "DQ_001",
+    "RULE_NAME": "NULL_CHECK",
+    "IS_ACTIVE": true
+  },
+  {
+    "RULE_ID": "DQ_002",
+    "RULE_NAME": "DUPLICATE_CHECK",
+    "IS_ACTIVE": true
+  },
+  {
+    "RULE_ID": "DQ_003",
+    "RULE_NAME": "RANGE_CHECK",
+    "IS_ACTIVE": true
+  },
+  {
+    "RULE_ID": "DQ_004",
+    "RULE_NAME": "MIN_LENGTH_CHECK",
+    "IS_ACTIVE": true
+  },
+  {
+    "RULE_ID": "DQ_005",
+    "RULE_NAME": "CUSTOM_SQL_CHECK",
+    "IS_ACTIVE": true
+  },
+  {
+    "RULE_ID": "DQ_006",
+    "RULE_NAME": "VALID_VALUE_CHECK",
+    "IS_ACTIVE": true
+  }
+]

@@ -57,7 +57,7 @@ class DQRunner:
 
             dq_config_df = config_loader.load_active_rules()
 
-            if dq_config_df.count() == 0:
+            if not dq_config_df:
 
                 logger.warning(
                     "No active DQ rules found. Skipping execution."

@@ -1,50 +1,52 @@
-from snowflake.snowpark import Session
-from cryptography.hazmat.primitives import serialization
-import json
 import os
+from dotenv import load_dotenv
+from snowflake.snowpark import Session
 
 
 class SnowflakeConnector:
 
     def create_session(self):
+        """
+        Create a Snowflake session using SSO (External Browser Authentication)
+        """
 
-        conn_file_path = os.getenv(
-            "SNOWFLAKE_CONN_FILE",
-            "/Users/206909593/DQ/connection/conn.json"
-        )
+        try:
+            load_dotenv(override=True)
 
-        if not os.path.exists(conn_file_path):
-            raise FileNotFoundError(
-                f"Snowflake connection file not found: {conn_file_path}"
-            )
+            connection_parameters = {
+                "account": os.environ["SNOWFLAKE_ACCOUNT"],
+                "user": os.environ["SNOWFLAKE_USER"],
+                "warehouse": os.environ["SNOWFLAKE_WAREHOUSE"],
+                "database": os.environ["SNOWFLAKE_DATABASE"],
+                "schema": os.environ["SNOWFLAKE_SCHEMA"],
+                "role": os.environ["SNOWFLAKE_ROLE"],
+                "authenticator": "externalbrowser"
+            }
 
-        with open(conn_file_path, "r") as conn_file:
-            connection_parameters = json.load(conn_file)
+            session = Session.builder.configs(
+                connection_parameters
+            ).create()
 
-        # Load private key
-        with open(
-            connection_parameters["private_key_file"],
-            "rb"
-        ) as key_file:
+            result = session.sql("""
+                SELECT
+                    CURRENT_USER(),
+                    CURRENT_ROLE(),
+                    CURRENT_WAREHOUSE(),
+                    CURRENT_DATABASE(),
+                    CURRENT_SCHEMA()
+            """).collect()
 
-            p_key = serialization.load_pem_private_key(
-                key_file.read(),
-                password=None
-            )
+            row = result[0]
 
-        private_key = p_key.private_bytes(
-            encoding=serialization.Encoding.DER,
-            format=serialization.PrivateFormat.PKCS8,
-            encryption_algorithm=serialization.NoEncryption()
-        )
+            print("\n===== Snowflake Session Details =====")
+            print(f"User       : {row['CURRENT_USER()']}")
+            print(f"Role       : {row['CURRENT_ROLE()']}")
+            print(f"Warehouse  : {row['CURRENT_WAREHOUSE()']}")
+            print(f"Database   : {row['CURRENT_DATABASE()']}")
+            print(f"Schema     : {row['CURRENT_SCHEMA()']}")
+            print("=====================================\n")
 
-        # Remove file path and replace with actual key
-        connection_parameters.pop("private_key_file")
+            return session
 
-        connection_parameters["private_key"] = private_key
-
-        session = Session.builder.configs(
-            connection_parameters
-        ).create()
-
-        return session
+        except Exception as e:
+            raise Exception(f"Failed to create Snowflake session: {str(e)}")
