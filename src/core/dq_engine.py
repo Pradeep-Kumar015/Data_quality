@@ -343,8 +343,11 @@ class DQEngine:
                     )
 
                     # -----------------------------------------
-                    # 🔥 EXECUTION SUCCESS (IMPORTANT FIX)
+                    # 🔥 EXECUTION STATUS LOGGING
                     # -----------------------------------------
+                    execution_status = (
+                        "PASS" if rule_status == "PASS" else "FAIL"
+                    )
                     self.log_execution(
                         database,
                         schema,
@@ -352,7 +355,7 @@ class DQEngine:
                         rule_id,
                         config_id,
                         column_key,
-                        "PASS"
+                        execution_status
                     )
 
                     rules_executed += 1

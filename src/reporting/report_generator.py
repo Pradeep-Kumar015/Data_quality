@@ -329,4 +329,21 @@ class ReportGenerator:
         logger.info(
             f"Error result written successfully → {rule_id} ({column_name})"
         )
+
+        if severity == "HIGH" and self.teams_alert:
+            try:
+                self.teams_alert.send_error_alert(
+                    table,
+                    column_name,
+                    rule_type,
+                    error_message
+                )
+                logger.info(
+                    "🚨 Teams HIGH severity error alert sent successfully"
+                )
+            except Exception as e:
+                logger.error(
+                    f"Teams error alert failed: {str(e)}"
+                )
+
         return "FAIL"

@@ -1,3 +1,4 @@
+import json
 import os
 import requests
 from datetime import datetime
@@ -38,6 +39,7 @@ class TeamsAlert:
         payload = {
 
             "type": "message",
+            "text": "Data Quality rule failure alert",
 
             "attachments": [
 
@@ -131,6 +133,101 @@ class TeamsAlert:
             ]
         }
 
+        payload["summary"] = (
+            "Data Quality Rule Failure Alert: "
+            f"{table}.{column}"
+        )
+        logger.debug(
+            "Prepared Teams failure alert payload for %s.%s | rule=%s | failure_pct=%.4f | threshold=%.4f",
+            table,
+            column,
+            rule,
+            failure_percentage,
+            threshold
+        )
+        self._send(payload)
+
+
+    # ---------------------------------------------------
+    # ERROR ALERT (Adaptive Card)
+    # ---------------------------------------------------
+    def send_error_alert(
+        self,
+        table,
+        column,
+        rule,
+        error_message
+    ):
+
+        execution_time = datetime.now()
+        airflow_context = self._get_airflow_context()
+        payload = {
+            "type": "message",
+            "text": "Data Quality rule error alert",
+            "attachments": [
+                {
+                    "contentType": "application/vnd.microsoft.card.adaptive",
+                    "content": {
+                        "$schema":
+                        "http://adaptivecards.io/schemas/adaptive-card.json",
+                        "type": "AdaptiveCard",
+                        "version": "1.4",
+                        "body": [
+                            {
+                                "type": "TextBlock",
+                                "text": "🚨 DATA QUALITY RULE ERROR ALERT",
+                                "weight": "Bolder",
+                                "size": "Large",
+                                "color": "Attention"
+                            },
+                            {
+                                "type": "FactSet",
+                                "facts": [
+                                    {
+                                        "title": "Table",
+                                        "value": table
+                                    },
+                                    {
+                                        "title": "Column",
+                                        "value": column
+                                    },
+                                    {
+                                        "title": "Rule",
+                                        "value": rule
+                                    },
+                                    {
+                                        "title": "Error",
+                                        "value": str(error_message)
+                                    },
+                                    {
+                                        "title": "Execution Time",
+                                        "value": str(execution_time)
+                                    },
+                                    *airflow_context
+                                ]
+                            },
+                            {
+                                "type": "TextBlock",
+                                "text": "— Data Quality Monitoring Framework",
+                                "spacing": "Medium",
+                                "isSubtle": True
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+        payload["summary"] = (
+            "Data Quality Rule Error Alert: "
+            f"{table}.{column}"
+        )
+        logger.debug(
+            "Prepared Teams error alert payload for %s.%s | rule=%s | error=%s",
+            table,
+            column,
+            rule,
+            error_message
+        )
         self._send(payload)
 
 
@@ -168,6 +265,7 @@ class TeamsAlert:
         payload = {
 
             "type": "message",
+            "text": "Data Quality execution summary",
 
             "attachments": [
 
@@ -290,6 +388,13 @@ class TeamsAlert:
             ]
         }
 
+        logger.debug(
+            "Prepared Teams summary alert payload | tables_checked=%s | rules_executed=%s | pass_count=%s | fail_count=%s",
+            tables_checked,
+            rules_executed,
+            pass_count,
+            fail_count
+        )
         self._send(payload)
 
 
@@ -300,16 +405,40 @@ class TeamsAlert:
 
         try:
 
+            logger.debug(
+                "Posting Teams webhook to %s",
+                self.webhook_url
+            )
+            logger.debug(
+                "Teams alert request payload: %s",
+                json.dumps(payload, ensure_ascii=False)
+            )
+
             response = requests.post(
                 self.webhook_url,
                 json=payload,
+                headers={"Content-Type": "application/json"},
                 timeout=10
             )
 
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except Exception as http_err:
+                logger.error(
+                    "Teams alert HTTP failure: %s | status=%s | body=%s",
+                    str(http_err),
+                    response.status_code,
+                    response.text
+                )
+                raise
 
             logger.info(
-                "Teams alert sent successfully"
+                "Teams alert sent successfully | status=%s",
+                response.status_code
+            )
+            logger.debug(
+                "Teams alert response body: %s",
+                response.text
             )
 
         except Exception as e:
@@ -317,6 +446,7 @@ class TeamsAlert:
             logger.error(
                 f"Teams alert failed: {str(e)}"
             )
+            raise
 
 
     # ---------------------------------------------------

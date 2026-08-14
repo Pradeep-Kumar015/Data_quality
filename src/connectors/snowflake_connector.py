@@ -22,6 +22,8 @@ class SnowflakeConnector:
                 "role": os.environ["SNOWFLAKE_ROLE"],
                 "authenticator": "externalbrowser"
             }
+            
+            print("connection_parameters", connection_parameters)
 
             session = Session.builder.configs(
                 connection_parameters
