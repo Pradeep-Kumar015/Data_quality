@@ -15,7 +15,7 @@ class DBConfigLoader:
 
         dq_config_df = (
             self.session
-            .table("DEMO_DB.PUBLIC.DQ_CONFIG")
+            .table("BI_DATA_QUALITY_UAT.DQT.DQ_CONFIG")
             .filter(col("IS_ACTIVE") == True)
         )
 
@@ -48,9 +48,14 @@ class DBConfigLoader:
                 "func": validity.execute_min_length,
                 "name": "MIN_LENGTH_CHECK"
             },
-
+            
             "DQ_005": {
                 "func": custom_sql.execute,
                 "name": "CUSTOM_SQL_CHECK"
+            },
+            
+            "DQ_006": {
+                "func": validity.execute_valid_value_check,
+                "name": "VALID_VALUE_CHECK"
             }
         }
