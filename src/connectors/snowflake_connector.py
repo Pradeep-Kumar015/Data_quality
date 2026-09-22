@@ -8,20 +8,36 @@ class SnowflakeConnector:
 
     def create_session(self):
 
-        # ---------------------------------------------------------
-        # 1. Select Snowflake connection
-        # ---------------------------------------------------------
+        execution_mode = os.getenv(
+            "DQM_CONNECTION_MODE",
+            "LOCAL"
+        ).upper()
+
+        if execution_mode == "AIRFLOW":
+
+            return self._create_airflow_session()
+
+        return self._create_local_session()
+
+    # =========================================================
+    # LOCAL
+    # =========================================================
+
+    def _create_local_session(self):
+
         connection_name = os.getenv(
             "SNOWFLAKE_CONNECTION",
             "UDX_CORE_UAT"
         ).upper()
 
         connection_files = {
-            "UDX_CORE_UAT": (
+            "UDX_CORE_UAT": os.getenv(
+                "UDX_CORE_UAT_CONNECTION_FILE",
                 "/Users/206909593/DQ/connection/"
                 "conn_udx_core_uat.json"
             ),
-            "DQT": (
+            "DQT": os.getenv(
+                "DQT_CONNECTION_FILE",
                 "/Users/206909593/DQ/connection/"
                 "conn_dqt.json"
             )
@@ -30,61 +46,101 @@ class SnowflakeConnector:
         if connection_name not in connection_files:
             raise ValueError(
                 f"Invalid SNOWFLAKE_CONNECTION: "
-                f"{connection_name}. "
-                f"Expected one of: "
-                f"{', '.join(connection_files.keys())}"
+                f"{connection_name}"
             )
 
         conn_file_path = connection_files[connection_name]
 
-        # ---------------------------------------------------------
-        # 2. Validate connection file
-        # ---------------------------------------------------------
         if not os.path.exists(conn_file_path):
             raise FileNotFoundError(
                 f"Snowflake connection file not found: "
                 f"{conn_file_path}"
             )
 
-        # ---------------------------------------------------------
-        # 3. Read connection JSON
-        # ---------------------------------------------------------
         with open(conn_file_path, "r") as conn_file:
             connection_parameters = json.load(conn_file)
 
-        # ---------------------------------------------------------
-        # 4. Get private key content from JSON
-        # ---------------------------------------------------------
         private_key_content = connection_parameters.get(
             "private_key_content"
         )
 
         if not private_key_content:
             raise ValueError(
-                f"private_key_content is missing in "
-                f"{conn_file_path}"
+                "private_key_content is missing"
             )
 
-        # ---------------------------------------------------------
-        # 5. Normalize private key content
-        #
-        # JSON may contain literal escaped newline characters:
-        #
-        # -----BEGIN ENCRYPTED PRIVATE KEY-----\nABC...\n-----
-        #
-        # Convert them into actual newline characters.
-        # ---------------------------------------------------------
-        private_key_content = private_key_content.replace(
-            "\\n",
-            "\n"
+        return self._create_session_from_key(
+            connection_parameters,
+            private_key_content,
+            conn_file_path
         )
 
-        # Remove accidental leading/trailing whitespace
-        private_key_content = private_key_content.strip()
+    # =========================================================
+    # AIRFLOW / POLAR
+    # =========================================================
 
-        # ---------------------------------------------------------
-        # 6. Get private key passphrase
-        # ---------------------------------------------------------
+    def _create_airflow_session(self):
+
+        required_variables = [
+            "SNOWFLAKE_ACCOUNT",
+            "SNOWFLAKE_USER",
+            "SNOWFLAKE_WAREHOUSE",
+            "SNOWFLAKE_DATABASE",
+            "SNOWFLAKE_SCHEMA",
+            "SNOWFLAKE_ROLE",
+            "SNOWFLAKE_PRIVATE_KEY",
+            "SNOWFLAKE_PRIVATE_KEY_PASSPHRASE"
+        ]
+
+        missing = [
+            variable
+            for variable in required_variables
+            if not os.getenv(variable)
+        ]
+
+        if missing:
+            raise ValueError(
+                "Missing Snowflake environment variables: "
+                + ", ".join(missing)
+            )
+
+        connection_parameters = {
+            "account": os.getenv("SNOWFLAKE_ACCOUNT"),
+            "user": os.getenv("SNOWFLAKE_USER"),
+            "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE"),
+            "database": os.getenv("SNOWFLAKE_DATABASE"),
+            "schema": os.getenv("SNOWFLAKE_SCHEMA"),
+            "role": os.getenv("SNOWFLAKE_ROLE"),
+            "insecure_mode": True
+        }
+
+        private_key_content = os.getenv(
+            "SNOWFLAKE_PRIVATE_KEY"
+        )
+
+        return self._create_session_from_key(
+            connection_parameters,
+            private_key_content,
+            "Airflow connection"
+        )
+
+    # =========================================================
+    # COMMON PRIVATE KEY PROCESSING
+    # =========================================================
+
+    def _create_session_from_key(
+        self,
+        connection_parameters,
+        private_key_content,
+        source
+    ):
+
+        private_key_content = (
+            private_key_content
+            .replace("\\n", "\n")
+            .strip()
+        )
+
         private_key_passphrase = os.getenv(
             "SNOWFLAKE_PRIVATE_KEY_PASSPHRASE"
         )
@@ -92,12 +148,9 @@ class SnowflakeConnector:
         if not private_key_passphrase:
             raise ValueError(
                 "SNOWFLAKE_PRIVATE_KEY_PASSPHRASE "
-                "environment variable is not set"
+                "is not set"
             )
 
-        # ---------------------------------------------------------
-        # 7. Load encrypted private key
-        # ---------------------------------------------------------
         try:
 
             p_key = serialization.load_pem_private_key(
@@ -108,14 +161,10 @@ class SnowflakeConnector:
         except Exception as e:
 
             raise ValueError(
-                "Failed to load private key from "
-                f"'private_key_content' in {conn_file_path}. "
-                "Please verify the PEM format and passphrase."
+                f"Failed to load private key from {source}. "
+                "Please verify PEM format and passphrase."
             ) from e
 
-        # ---------------------------------------------------------
-        # 8. Convert private key to DER PKCS8
-        # ---------------------------------------------------------
         try:
 
             private_key = p_key.private_bytes(
@@ -127,26 +176,12 @@ class SnowflakeConnector:
         except Exception as e:
 
             raise ValueError(
-                "Failed to convert private key to "
-                "DER PKCS8 format."
+                "Failed to convert private key "
+                "to DER PKCS8 format."
             ) from e
-
-        # ---------------------------------------------------------
-        # 9. Remove private key content from Snowflake parameters
-        #
-        # Snowflake should receive the actual private key bytes,
-        # not the encrypted PEM string.
-        # ---------------------------------------------------------
-        connection_parameters.pop(
-            "private_key_content",
-            None
-        )
 
         connection_parameters["private_key"] = private_key
 
-        # ---------------------------------------------------------
-        # 10. Create Snowflake session
-        # ---------------------------------------------------------
         try:
 
             session = (
@@ -159,9 +194,7 @@ class SnowflakeConnector:
 
             raise RuntimeError(
                 f"Failed to create Snowflake session "
-                f"for connection '{connection_name}' "
-                f"using {conn_file_path}: {e}"
+                f"using {source}: {e}"
             ) from e
 
         return session
-
