@@ -17,5 +17,3 @@ python-dotenv>=1.0.1
 # Optional but useful
 pandas>=2.2.0
 
-snowflake-snowpark-python
-pandas
