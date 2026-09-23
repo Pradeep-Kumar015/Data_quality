@@ -52,14 +52,46 @@ PYTHON_PACKAGES_DIR: str = os.path.join(
 
 
 # ============================================================
+# EXISTING AIRFLOW SNOWFLAKE CONNECTION
+# ============================================================
+
+SNOWFLAKE_CONNECTION_ID: str = "snowflake_maximo_conn"
+
+
+# ============================================================
 # DQM EXECUTION
 # ============================================================
 
 def download_and_run_dqm():
     """
-    Download DQ.zip using the Organization S3 configuration,
-    extract the DQM project, install DQM dependencies into a
-    temporary directory, and execute scripts/run_dq.py.
+    Download DQ.zip using the existing Organization S3
+    configuration, extract the DQM project, install DQM
+    dependencies into a temporary directory, configure the
+    DQM process to use the existing Airflow Snowflake
+    connection, and execute scripts/run_dq.py.
+
+    Existing Airflow Snowflake connection:
+
+        snowflake_maximo_conn
+
+    Snowflake source database:
+
+        UDX_CORE_UAT
+
+    DQM metadata database:
+
+        BI_DATA_QUALITY_UAT
+
+    The DQM metadata tables must use fully-qualified
+    database.schema.table names.
+
+    No local Snowflake JSON connection is used.
+
+    No second Snowflake connection is required.
+
+    The Snowflake private-key passphrase is retrieved by
+    SnowflakeConnector directly from the Password field of
+    the existing Airflow connection.
     """
 
     logger.info("==================================================")
@@ -127,8 +159,7 @@ def download_and_run_dqm():
         SUBJECT_AREA,
     )
 
-    # IMPORTANT:
-    # Use the existing Organization S3 configuration.
+    # Use existing Organization S3 configuration.
     #
     # No new S3Hook.
     # No new AWS connection.
@@ -217,10 +248,6 @@ def download_and_run_dqm():
             logger.info(
                 "Number of files inside DQ.zip: %s",
                 len(zip_files),
-            )
-
-            logger.info(
-                "Files found inside DQ.zip:"
             )
 
             for file_name in zip_files:
@@ -356,12 +383,6 @@ def download_and_run_dqm():
 
     # --------------------------------------------------------
     # 8. Install DQM dependencies
-    #
-    # Packages are installed into:
-    #
-    # /tmp/udx_maximo_dqm/python_packages
-    #
-    # We do NOT modify the shared Airflow Python environment.
     # --------------------------------------------------------
 
     logger.info("==================================================")
@@ -395,10 +416,6 @@ def download_and_run_dqm():
         PYTHON_PACKAGES_DIR,
     )
 
-    logger.info(
-        "Running pip installation..."
-    )
-
     try:
 
         install_result = subprocess.run(
@@ -427,18 +444,10 @@ def download_and_run_dqm():
     logger.info("PIP INSTALL OUTPUT")
     logger.info("==================================================")
 
-    if install_output.strip():
-
-        logger.info(
-            "%s",
-            install_output,
-        )
-
-    else:
-
-        logger.info(
-            "<NO PIP OUTPUT>"
-        )
+    logger.info(
+        "%s",
+        install_output or "<NO PIP OUTPUT>",
+    )
 
     logger.info("==================================================")
 
@@ -460,29 +469,49 @@ def download_and_run_dqm():
     )
 
     # --------------------------------------------------------
-    # 9. Verify python-dotenv
+    # 9. Build DQM subprocess environment
     # --------------------------------------------------------
 
     logger.info("==================================================")
-    logger.info("Verifying python-dotenv installation")
+    logger.info("Building DQM execution environment")
     logger.info("==================================================")
-
-    dotenv_check_command = [
-        sys.executable,
-        "-u",
-        "-c",
-        (
-            "import dotenv; "
-            "print('python-dotenv imported successfully'); "
-            "print('dotenv location:', dotenv.__file__)"
-        ),
-    ]
-
-    # Create environment for dependency verification.
 
     env = os.environ.copy()
 
     env["PYTHONUNBUFFERED"] = "1"
+
+    # --------------------------------------------------------
+    # 9A. AIRFLOW SNOWFLAKE CONNECTION
+    # --------------------------------------------------------
+    #
+    # The DQM SnowflakeConnector reads this connection ID
+    # and retrieves the complete connection from Airflow.
+    #
+    # The connector also reads the private-key passphrase
+    # directly from the Password field of this connection.
+    #
+    # The passphrase is NOT copied into an environment
+    # variable by this DAG.
+    # --------------------------------------------------------
+
+    env["SNOWFLAKE_AIRFLOW_CONNECTION_ID"] = (
+        SNOWFLAKE_CONNECTION_ID
+    )
+
+    logger.info(
+        "Airflow Snowflake connection ID: %s",
+        SNOWFLAKE_CONNECTION_ID,
+    )
+
+    logger.info(
+        "DQM Snowflake connector will retrieve the "
+        "private-key passphrase directly from the "
+        "Airflow connection Password field."
+    )
+
+    # --------------------------------------------------------
+    # 10. Configure PYTHONPATH
+    # --------------------------------------------------------
 
     existing_pythonpath = env.get(
         "PYTHONPATH",
@@ -503,6 +532,30 @@ def download_and_run_dqm():
     env["PYTHONPATH"] = os.pathsep.join(
         python_paths
     )
+
+    logger.info(
+        "DQM PYTHONPATH: %s",
+        env["PYTHONPATH"],
+    )
+
+    # --------------------------------------------------------
+    # 11. Verify python-dotenv
+    # --------------------------------------------------------
+
+    logger.info("==================================================")
+    logger.info("Verifying python-dotenv installation")
+    logger.info("==================================================")
+
+    dotenv_check_command = [
+        sys.executable,
+        "-u",
+        "-c",
+        (
+            "import dotenv; "
+            "print('python-dotenv imported successfully'); "
+            "print('dotenv location:', dotenv.__file__)"
+        ),
+    ]
 
     try:
 
@@ -545,12 +598,8 @@ def download_and_run_dqm():
             f"{dotenv_check.stdout or '<NO OUTPUT>'}"
         )
 
-    logger.info(
-        "python-dotenv is available to the DQM process."
-    )
-
     # --------------------------------------------------------
-    # 10. Check common DQM directories
+    # 12. Check DQM directories
     # --------------------------------------------------------
 
     src_dir = os.path.join(
@@ -588,7 +637,7 @@ def download_and_run_dqm():
     )
 
     # --------------------------------------------------------
-    # 11. Validate Python environment
+    # 13. Validate Python environment
     # --------------------------------------------------------
 
     logger.info("==================================================")
@@ -621,7 +670,7 @@ def download_and_run_dqm():
     )
 
     # --------------------------------------------------------
-    # 12. Verify Python module discovery
+    # 14. Verify Python module discovery
     # --------------------------------------------------------
 
     logger.info("==================================================")
@@ -687,14 +736,7 @@ def download_and_run_dqm():
         )
 
     # --------------------------------------------------------
-    # 13. Execute DQM
-    #
-    # Local command:
-    #
-    # python3 -m scripts.run_dq
-    #
-    # We intentionally use module mode because the DQM
-    # project imports modules from src.
+    # 15. Execute DQM
     # --------------------------------------------------------
 
     command = [
@@ -723,8 +765,21 @@ def download_and_run_dqm():
         sys.executable,
     )
 
+    logger.info(
+        "Airflow Snowflake connection ID: %s",
+        env.get(
+            "SNOWFLAKE_AIRFLOW_CONNECTION_ID"
+        ),
+    )
+
+    logger.info(
+        "Snowflake private-key passphrase will be "
+        "retrieved directly by SnowflakeConnector "
+        "from the Airflow connection."
+    )
+
     # --------------------------------------------------------
-    # 14. Run DQM
+    # 16. Run DQM
     # --------------------------------------------------------
 
     try:
@@ -751,7 +806,7 @@ def download_and_run_dqm():
         ) from exc
 
     # --------------------------------------------------------
-    # 15. Capture DQM output
+    # 17. Capture DQM output
     # --------------------------------------------------------
 
     dqm_output = result.stdout or ""
@@ -760,18 +815,10 @@ def download_and_run_dqm():
     logger.info("DQM PROCESS OUTPUT START")
     logger.info("==================================================")
 
-    if dqm_output.strip():
-
-        logger.info(
-            "%s",
-            dqm_output,
-        )
-
-    else:
-
-        logger.info(
-            "<DQM PROCESS PRODUCED NO STDOUT/STDERR OUTPUT>"
-        )
+    logger.info(
+        "%s",
+        dqm_output or "<DQM PROCESS PRODUCED NO OUTPUT>",
+    )
 
     logger.info("==================================================")
     logger.info("DQM PROCESS OUTPUT END")
@@ -783,7 +830,7 @@ def download_and_run_dqm():
     )
 
     # --------------------------------------------------------
-    # 16. Validate DQM execution
+    # 18. Validate DQM execution
     # --------------------------------------------------------
 
     if result.returncode != 0:
@@ -792,21 +839,13 @@ def download_and_run_dqm():
             "DQM execution failed."
         )
 
-        logger.error(
-            "DQM return code: %s",
-            result.returncode,
+        error_details = (
+            dqm_output.strip()
+            if dqm_output.strip()
+            else
+            "DQM process returned a non-zero exit code "
+            "but produced no output."
         )
-
-        if dqm_output.strip():
-
-            error_details = dqm_output.strip()
-
-        else:
-
-            error_details = (
-                "DQM process returned a non-zero exit code "
-                "but produced no stdout/stderr output."
-            )
 
         raise RuntimeError(
             "DQM execution failed.\n\n"
@@ -816,7 +855,7 @@ def download_and_run_dqm():
         )
 
     # --------------------------------------------------------
-    # 17. DQM successful
+    # 19. DQM successful
     # --------------------------------------------------------
 
     logger.info("==================================================")

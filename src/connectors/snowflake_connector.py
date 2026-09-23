@@ -1,189 +1,90 @@
 from snowflake.snowpark import Session
 from cryptography.hazmat.primitives import serialization
-import json
+
 import os
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 
 class SnowflakeConnector:
 
+    AIRFLOW_CONNECTION_ID = "snowflake_maximo_conn"
+
     def create_session(self):
+        """
+        Create a Snowpark Snowflake session using the
+        existing Airflow connection.
 
-        execution_mode = os.getenv(
-            "DQM_CONNECTION_MODE",
-            "LOCAL"
-        ).upper()
+        Airflow Connection:
+            Login    -> Snowflake user
+            Password -> Private-key passphrase
+            Extra    -> Snowflake connection details and
+                       encrypted private-key content
+        """
 
-        if execution_mode == "AIRFLOW":
-            return self._create_airflow_session()
-
-        return self._create_local_session()
-
-    # =========================================================
-    # LOCAL MODE
-    # =========================================================
-
-    def _create_local_session(self):
-
-        connection_name = os.getenv(
-            "SNOWFLAKE_CONNECTION",
-            "UDX_CORE_UAT"
-        ).upper()
-
-        connection_files = {
-            "UDX_CORE_UAT": os.getenv(
-                "UDX_CORE_UAT_CONNECTION_FILE",
-                "/Users/206909593/DQ/connection/"
-                "conn_udx_core_uat.json"
-            ),
-            "DQT": os.getenv(
-                "DQT_CONNECTION_FILE",
-                "/Users/206909593/DQ/connection/"
-                "conn_dqt.json"
-            )
-        }
-
-        if connection_name not in connection_files:
-            raise ValueError(
-                f"Invalid SNOWFLAKE_CONNECTION: "
-                f"{connection_name}. "
-                f"Expected one of: "
-                f"{', '.join(connection_files.keys())}"
-            )
-
-        conn_file_path = connection_files[connection_name]
-
-        if not os.path.exists(conn_file_path):
-            raise FileNotFoundError(
-                "Snowflake connection file not found: "
-                f"{conn_file_path}"
-            )
-
-        with open(
-            conn_file_path,
-            "r",
-            encoding="utf-8"
-        ) as conn_file:
-
-            connection_parameters = json.load(
-                conn_file
-            )
-
-        private_key_content = (
-            connection_parameters.get(
-                "private_key_content"
-            )
-        )
-
-        if not private_key_content:
-            raise ValueError(
-                "private_key_content is missing from "
-                f"{conn_file_path}"
-            )
-
-        return self._create_session_from_key(
-            connection_parameters=connection_parameters,
-            private_key_content=private_key_content,
-            source=conn_file_path
-        )
-
-    # =========================================================
-    # AIRFLOW MODE
-    # =========================================================
-
-    def _create_airflow_session(self):
+        # =====================================================
+        # GET AIRFLOW BASEHOOK
+        # =====================================================
 
         try:
-
             from airflow.hooks.base import BaseHook
-
-        except ImportError as e:
-
+        except Exception as e:
             raise RuntimeError(
-                "Airflow is not available. "
-                "DQM_CONNECTION_MODE=AIRFLOW requires "
-                "the Airflow runtime."
+                "Unable to import Airflow BaseHook. "
+                "This DQM framework must run inside Airflow."
             ) from e
 
-        # -----------------------------------------------------
-        # Determine which logical Snowflake connection is needed
-        #
-        # UDX_CORE_UAT -> source database
-        # DQT          -> BI_DATA_QUALITY_UAT
-        # -----------------------------------------------------
+        # =====================================================
+        # GET AIRFLOW CONNECTION ID
+        # =====================================================
 
-        connection_name = os.getenv(
-            "SNOWFLAKE_CONNECTION",
-            "UDX_CORE_UAT"
-        ).upper()
+        connection_id = os.getenv(
+            "SNOWFLAKE_AIRFLOW_CONNECTION_ID",
+            self.AIRFLOW_CONNECTION_ID
+        )
 
-        airflow_connection_ids = {
-            "UDX_CORE_UAT": os.getenv(
-                "SNOWFLAKE_AIRFLOW_CONNECTION_UDX_CORE_UAT"
-            ),
-            "DQT": os.getenv(
-                "SNOWFLAKE_AIRFLOW_CONNECTION_DQT"
-            )
-        }
+        logger.info(
+            "Using Airflow Snowflake connection '%s'",
+            connection_id
+        )
 
-        if connection_name not in airflow_connection_ids:
-
-            raise ValueError(
-                f"Invalid SNOWFLAKE_CONNECTION: "
-                f"{connection_name}. "
-                f"Expected one of: "
-                f"{', '.join(airflow_connection_ids.keys())}"
-            )
-
-        connection_id = airflow_connection_ids[
-            connection_name
-        ]
-
-        if not connection_id:
-
-            raise ValueError(
-                f"Airflow connection ID is not configured "
-                f"for SNOWFLAKE_CONNECTION={connection_name}. "
-                f"Expected environment variable: "
-                f"SNOWFLAKE_AIRFLOW_CONNECTION_"
-                f"{connection_name}"
-            )
-
-        # -----------------------------------------------------
-        # Retrieve existing Airflow Connection
-        # -----------------------------------------------------
+        # =====================================================
+        # GET AIRFLOW CONNECTION
+        # =====================================================
 
         try:
-
             airflow_connection = (
-                BaseHook.get_connection(
-                    connection_id
-                )
+                BaseHook.get_connection(connection_id)
             )
-
         except Exception as e:
-
             raise RuntimeError(
-                f"Unable to retrieve Airflow connection "
-                f"'{connection_id}' for "
-                f"{connection_name}: {e}"
+                "Unable to retrieve Airflow connection "
+                f"'{connection_id}': {e}"
             ) from e
 
-        # -----------------------------------------------------
-        # Read Extra JSON
-        # -----------------------------------------------------
+        logger.info(
+            "Airflow Snowflake connection "
+            "'%s' retrieved successfully",
+            connection_id
+        )
+
+        # =====================================================
+        # GET EXTRA CONFIGURATION
+        # =====================================================
 
         extra = airflow_connection.extra_dejson
 
         if not extra:
-
             raise ValueError(
                 f"Airflow connection '{connection_id}' "
                 "does not contain Extra configuration."
             )
 
-        # -----------------------------------------------------
-        # Validate required fields
-        # -----------------------------------------------------
+        # =====================================================
+        # VALIDATE REQUIRED EXTRA FIELDS
+        # =====================================================
 
         required_extra_fields = [
             "account",
@@ -200,27 +101,48 @@ class SnowflakeConnector:
         ]
 
         if missing_fields:
-
             raise ValueError(
                 f"Missing required fields in Airflow "
                 f"connection '{connection_id}' Extra: "
                 + ", ".join(missing_fields)
             )
 
-        # -----------------------------------------------------
-        # User comes from Airflow Connection Login
-        # -----------------------------------------------------
+        # =====================================================
+        # VALIDATE LOGIN
+        # =====================================================
 
         if not airflow_connection.login:
-
             raise ValueError(
                 f"Login/user is not configured in "
                 f"Airflow connection '{connection_id}'."
             )
 
-        # -----------------------------------------------------
-        # Build Snowflake connection parameters
-        # -----------------------------------------------------
+        # =====================================================
+        # PRIVATE KEY PASSPHRASE
+        #
+        # Airflow Connection Password field contains
+        # the encrypted Snowflake private-key passphrase.
+        # =====================================================
+
+        private_key_passphrase = airflow_connection.password
+
+        if not private_key_passphrase:
+            raise ValueError(
+                f"Password field is empty in Airflow "
+                f"connection '{connection_id}'. "
+                "Please configure the Snowflake "
+                "private-key passphrase in the "
+                "Airflow Connection Password field."
+            )
+
+        logger.info(
+            "Private-key passphrase retrieved from "
+            "Airflow connection Password field"
+        )
+
+        # =====================================================
+        # BUILD SNOWFLAKE CONNECTION PARAMETERS
+        # =====================================================
 
         connection_parameters = {
             "account": extra["account"],
@@ -234,93 +156,32 @@ class SnowflakeConnector:
             )
         }
 
-        # -----------------------------------------------------
-        # Schema
-        #
-        # Prefer Airflow Connection Schema.
-        # Otherwise use Extra schema if available.
-        # -----------------------------------------------------
+        # =====================================================
+        # OPTIONAL SCHEMA
+        # =====================================================
 
         if airflow_connection.schema:
-
             connection_parameters["schema"] = (
                 airflow_connection.schema
             )
-
         elif extra.get("schema"):
-
             connection_parameters["schema"] = (
                 extra["schema"]
             )
 
-        # -----------------------------------------------------
-        # Private key
-        # -----------------------------------------------------
+        # =====================================================
+        # PRIVATE KEY CONTENT
+        # =====================================================
 
-        private_key_content = (
-            extra.get("private_key_content")
+        private_key_content = extra.get(
+            "private_key_content"
         )
 
         if not private_key_content:
-
             raise ValueError(
                 f"private_key_content is missing from "
                 f"Airflow connection '{connection_id}'."
             )
-
-        # -----------------------------------------------------
-        # Private key passphrase
-        #
-        # Passphrase is NOT stored in the connection JSON/Extra.
-        # It must be available as an environment variable.
-        # -----------------------------------------------------
-
-        private_key_passphrase = os.getenv(
-            "SNOWFLAKE_PRIVATE_KEY_PASSPHRASE"
-        )
-
-        if not private_key_passphrase:
-
-            raise ValueError(
-                "SNOWFLAKE_PRIVATE_KEY_PASSPHRASE "
-                "is not set in Airflow."
-            )
-
-        # -----------------------------------------------------
-        # Create Snowflake session
-        # -----------------------------------------------------
-
-        return self._create_session_from_key(
-            connection_parameters=connection_parameters,
-            private_key_content=private_key_content,
-            source=(
-                f"Airflow connection: "
-                f"{connection_id} "
-                f"({connection_name})"
-            )
-        )
-
-    # =========================================================
-    # COMMON PRIVATE KEY PROCESSING
-    # =========================================================
-
-    def _create_session_from_key(
-        self,
-        connection_parameters,
-        private_key_content,
-        source
-    ):
-
-        if not private_key_content:
-
-            raise ValueError(
-                f"Private key content is empty. "
-                f"Source: {source}"
-            )
-
-        # -----------------------------------------------------
-        # Normalize escaped newline characters
-        # -----------------------------------------------------
 
         private_key_content = (
             private_key_content
@@ -328,27 +189,16 @@ class SnowflakeConnector:
             .strip()
         )
 
-        # -----------------------------------------------------
-        # Get encrypted private-key passphrase
-        # -----------------------------------------------------
-
-        private_key_passphrase = os.getenv(
-            "SNOWFLAKE_PRIVATE_KEY_PASSPHRASE"
+        logger.info(
+            "Private-key content retrieved from "
+            "Airflow connection"
         )
 
-        if not private_key_passphrase:
-
-            raise ValueError(
-                "SNOWFLAKE_PRIVATE_KEY_PASSPHRASE "
-                "is not set."
-            )
-
-        # -----------------------------------------------------
-        # Load encrypted PEM private key
-        # -----------------------------------------------------
+        # =====================================================
+        # LOAD ENCRYPTED PRIVATE KEY
+        # =====================================================
 
         try:
-
             p_key = (
                 serialization.load_pem_private_key(
                     private_key_content.encode("utf-8"),
@@ -359,21 +209,24 @@ class SnowflakeConnector:
                 )
             )
 
-        except Exception as e:
+            logger.info(
+                "Snowflake private key loaded successfully"
+            )
 
+        except Exception as e:
             raise ValueError(
-                f"Failed to load private key from "
-                f"{source}. "
+                "Failed to load private key from "
+                f"Airflow connection '{connection_id}'. "
                 "Please verify the PEM format and "
-                "private-key passphrase."
+                "private-key passphrase in the "
+                "Password field."
             ) from e
 
-        # -----------------------------------------------------
-        # Convert private key to DER PKCS8
-        # -----------------------------------------------------
+        # =====================================================
+        # CONVERT PRIVATE KEY TO DER PKCS8
+        # =====================================================
 
         try:
-
             private_key = p_key.private_bytes(
                 encoding=serialization.Encoding.DER,
                 format=(
@@ -384,26 +237,34 @@ class SnowflakeConnector:
                 )
             )
 
-        except Exception as e:
+            logger.info(
+                "Private key converted to DER PKCS8 format"
+            )
 
+        except Exception as e:
             raise ValueError(
                 "Failed to convert private key "
                 "to DER PKCS8 format."
             ) from e
 
-        # -----------------------------------------------------
-        # Add private key to Snowflake configuration
-        # -----------------------------------------------------
+        # =====================================================
+        # ADD PRIVATE KEY TO CONNECTION PARAMETERS
+        # =====================================================
 
         connection_parameters["private_key"] = (
             private_key
         )
 
-        # -----------------------------------------------------
-        # Create Snowpark session
-        # -----------------------------------------------------
+        # =====================================================
+        # CREATE SNOWFLAKE SESSION
+        # =====================================================
 
         try:
+            logger.info(
+                "Creating Snowflake session using "
+                "Airflow connection '%s'",
+                connection_id
+            )
 
             session = (
                 Session.builder
@@ -412,10 +273,20 @@ class SnowflakeConnector:
             )
 
         except Exception as e:
-
             raise RuntimeError(
                 "Failed to create Snowflake session "
-                f"using {source}: {e}"
+                f"using Airflow connection "
+                f"'{connection_id}': {e}"
             ) from e
+
+        # =====================================================
+        # SUCCESS
+        # =====================================================
+
+        logger.info(
+            "Snowflake session created successfully "
+            "using Airflow connection '%s'",
+            connection_id
+        )
 
         return session
