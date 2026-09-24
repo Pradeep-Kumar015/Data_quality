@@ -122,6 +122,20 @@ class DQEngine:
         or:
 
             ("ITEM_SET_ID", "ITEM_ID")
+
+        Also supports:
+
+            EXCLUDE(
+                SOURCE_ID,
+                FILE_ID,
+                RECORD_ID,
+                LOAD_DATE_TIME,
+                LOAD_DATE_TIME_GMT,
+                RECORD_END_DATE_TIME
+            )
+
+        For EXCLUDE(...), the returned list contains the
+        excluded column names.
         """
 
         if value is None:
@@ -146,11 +160,208 @@ class DQEngine:
         if not value:
             return None
 
+        # ========================================================
+        # EXCLUDE(...) SYNTAX
+        # ========================================================
+
+        upper_value = value.upper()
+
+        if (
+            upper_value.startswith("EXCLUDE(")
+            and value.endswith(")")
+        ):
+
+            excluded_text = value[
+                value.find("(") + 1 : -1
+            ]
+
+            columns = [
+                column.strip()
+                for column in excluded_text.split(",")
+                if column.strip()
+            ]
+
+            return columns if columns else None
+
+        # ========================================================
+        # NORMAL COMMA-SEPARATED COLUMNS
+        # ========================================================
+
         return [
             column.strip()
             for column in value.split(",")
             if column.strip()
         ]
+
+    @staticmethod
+    def _is_exclude_expression(value):
+        """
+        Determine whether KEY_COLUMNS uses EXCLUDE(...) syntax.
+        """
+
+        if value is None:
+            return False
+
+        value = str(value).strip()
+
+        return (
+            value.upper().startswith("EXCLUDE(")
+            and value.endswith(")")
+        )
+
+    # ============================================================
+    # DQ_002 - GET DUPLICATE COMPARISON COLUMNS
+    # ============================================================
+
+    def _get_duplicate_columns(
+        self,
+        df,
+        row_dict
+    ):
+        """
+        Determine the columns used by DQ_002 duplicate detection.
+
+        Supported configuration formats:
+
+        1. Explicit columns:
+
+            ITEM_SET_ID,ITEM_ID
+
+        Result:
+
+            Compare only ITEM_SET_ID and ITEM_ID.
+
+        2. Whole-row duplicate detection:
+
+            EXCLUDE(
+                SOURCE_ID,
+                FILE_ID,
+                RECORD_ID,
+                LOAD_DATE_TIME,
+                LOAD_DATE_TIME_GMT,
+                RECORD_END_DATE_TIME
+            )
+
+        Result:
+
+            Compare every source-table column except the
+            excluded technical/audit columns.
+        """
+
+        raw_key_columns = self._get_string(
+            row_dict.get("KEY_COLUMNS")
+        )
+
+        if not raw_key_columns:
+
+            raise ValueError(
+                "KEY_COLUMNS is required for DQ_002"
+            )
+
+        # ========================================================
+        # WHOLE-ROW MODE
+        # ========================================================
+
+        if self._is_exclude_expression(
+            raw_key_columns
+        ):
+
+            excluded_columns = (
+                self._get_key_columns(
+                    raw_key_columns
+                )
+            )
+
+            excluded_columns_upper = {
+                column.upper()
+                for column in excluded_columns
+            }
+
+            # Snowpark DataFrame column names
+            # are normally returned in uppercase for
+            # unquoted Snowflake identifiers.
+            source_columns = list(
+                df.columns
+            )
+
+            duplicate_columns = [
+                column
+                for column in source_columns
+                if column.upper()
+                not in excluded_columns_upper
+            ]
+
+            if not duplicate_columns:
+
+                raise ValueError(
+                    "DQ_002 EXCLUDE configuration "
+                    "removed all columns from the "
+                    "duplicate comparison."
+                )
+
+            logger.info(
+                "DQ_002 whole-row duplicate detection: "
+                f"Excluded columns="
+                f"{sorted(excluded_columns_upper)}, "
+                f"Comparison columns="
+                f"{duplicate_columns}"
+            )
+
+            return duplicate_columns
+
+        # ========================================================
+        # EXPLICIT KEY COLUMN MODE
+        # ========================================================
+
+        duplicate_columns = (
+            self._get_key_columns(
+                raw_key_columns
+            )
+        )
+
+        if not duplicate_columns:
+
+            raise ValueError(
+                "No duplicate comparison columns "
+                "were found for DQ_002"
+            )
+
+        # --------------------------------------------------------
+        # Validate that configured columns exist
+        # --------------------------------------------------------
+
+        source_columns = {
+            str(column).upper(): column
+            for column in df.columns
+        }
+
+        missing_columns = [
+            column
+            for column in duplicate_columns
+            if column.upper()
+            not in source_columns
+        ]
+
+        if missing_columns:
+
+            raise ValueError(
+                "DQ_002 configured KEY_COLUMNS "
+                "do not exist in source table: "
+                f"{missing_columns}"
+            )
+
+        # Use actual source-table column casing.
+        duplicate_columns = [
+            source_columns[column.upper()]
+            for column in duplicate_columns
+        ]
+
+        logger.info(
+            "DQ_002 explicit duplicate detection: "
+            f"Comparison columns={duplicate_columns}"
+        )
+
+        return duplicate_columns
 
     # ============================================================
     # EXECUTION LOG - CHECK
@@ -398,15 +609,6 @@ class DQEngine:
     ):
         """
         Check whether DQ_RESULT was successfully created.
-
-        This protects against the following situation:
-
-            1. DQ calculation succeeds.
-            2. DQ_RESULT is inserted.
-            3. ReportGenerator fails during a later operation.
-
-        If DQ_RESULT exists, the DQ execution itself completed
-        and DQ_EXECUTION_LOG should be marked COMPLETED.
         """
 
         column_value = column_name or ""
@@ -470,6 +672,21 @@ class DQEngine:
         DQ_002:
             Requires KEY_COLUMNS.
 
+            KEY_COLUMNS can be:
+
+                ITEM_SET_ID,ITEM_ID
+
+            or:
+
+                EXCLUDE(
+                    SOURCE_ID,
+                    FILE_ID,
+                    RECORD_ID,
+                    LOAD_DATE_TIME,
+                    LOAD_DATE_TIME_GMT,
+                    RECORD_END_DATE_TIME
+                )
+
         DQ_005:
             Requires CUSTOM_SQL.
 
@@ -504,16 +721,53 @@ class DQEngine:
 
         if rule_id == "DQ_002":
 
-            key_columns = self._get_key_columns(
+            raw_key_columns = self._get_string(
                 row_dict.get("KEY_COLUMNS")
             )
 
-            if not key_columns:
+            if not raw_key_columns:
 
                 raise ValueError(
                     f"KEY_COLUMNS missing for "
                     f"{rule_id}: {row_dict}"
                 )
+
+            # ----------------------------------------------------
+            # Validate EXCLUDE(...) expression
+            # ----------------------------------------------------
+
+            if self._is_exclude_expression(
+                raw_key_columns
+            ):
+
+                excluded_columns = (
+                    self._get_key_columns(
+                        raw_key_columns
+                    )
+                )
+
+                if not excluded_columns:
+
+                    raise ValueError(
+                        f"EXCLUDE(...) does not contain "
+                        f"any columns for {rule_id}: "
+                        f"{row_dict}"
+                    )
+
+            else:
+
+                key_columns = (
+                    self._get_key_columns(
+                        raw_key_columns
+                    )
+                )
+
+                if not key_columns:
+
+                    raise ValueError(
+                        f"KEY_COLUMNS missing for "
+                        f"{rule_id}: {row_dict}"
+                    )
 
             return
 
@@ -675,8 +929,24 @@ class DQEngine:
         rule_id
     ):
         """
-        Determine the column/key used for execution logging
-        and reporting.
+        Determine the logical column/key used for:
+
+            - execution logging
+            - result identification
+            - reporting
+
+        For DQ_002, the configured KEY_COLUMNS expression
+        is preserved exactly as the logical key.
+
+        Example:
+
+            ITEM_SET_ID,ITEM_ID
+
+        or:
+
+            EXCLUDE(SOURCE_ID,FILE_ID,RECORD_ID,
+                    LOAD_DATE_TIME,LOAD_DATE_TIME_GMT,
+                    RECORD_END_DATE_TIME)
         """
 
         # ========================================================
@@ -697,8 +967,26 @@ class DQEngine:
 
         if rule_id == "DQ_002":
 
-            key_columns = self._get_key_columns(
+            raw_key_columns = self._get_string(
                 row_dict.get("KEY_COLUMNS")
+            )
+
+            if not raw_key_columns:
+
+                raise ValueError(
+                    f"KEY_COLUMNS missing for "
+                    f"{rule_id}: {row_dict}"
+                )
+
+            # Preserve EXCLUDE(...) expression exactly
+            if self._is_exclude_expression(
+                raw_key_columns
+            ):
+
+                return raw_key_columns
+
+            key_columns = self._get_key_columns(
+                raw_key_columns
             )
 
             if not key_columns:
@@ -1105,23 +1393,42 @@ class DQEngine:
                             )
 
                         # =========================================
-                        # DQ_002 - UNIQUE CHECK
+                        # DQ_002 - DUPLICATE CHECK
                         # =========================================
 
                         elif rule_id == "DQ_002":
 
-                            key_columns = (
-                                self._get_key_columns(
-                                    row_dict.get(
-                                        "KEY_COLUMNS"
-                                    )
+                            # ------------------------------------------------
+                            # Resolve actual duplicate comparison columns.
+                            #
+                            # Example:
+                            #
+                            # KEY_COLUMNS =
+                            # EXCLUDE(
+                            #   SOURCE_ID,
+                            #   FILE_ID,
+                            #   RECORD_ID,
+                            #   LOAD_DATE_TIME,
+                            #   LOAD_DATE_TIME_GMT,
+                            #   RECORD_END_DATE_TIME
+                            # )
+                            #
+                            # becomes all source columns except the
+                            # excluded technical columns.
+                            # ------------------------------------------------
+
+                            duplicate_columns = (
+                                self._get_duplicate_columns(
+                                    df,
+                                    row_dict
                                 )
                             )
 
-                            if not key_columns:
+                            if not duplicate_columns:
 
                                 raise ValueError(
-                                    f"KEY_COLUMNS missing for "
+                                    f"No duplicate comparison "
+                                    f"columns found for "
                                     f"{rule_id}"
                                 )
 
@@ -1129,7 +1436,10 @@ class DQEngine:
                                 f"Executing DQ_002 duplicate "
                                 f"check: "
                                 f"CONFIG_ID={config_id}, "
-                                f"KEY_COLUMNS={key_columns}"
+                                f"CONFIGURED_KEY_COLUMNS="
+                                f"{column_key}, "
+                                f"COMPARISON_COLUMNS="
+                                f"{duplicate_columns}"
                             )
 
                             (
@@ -1139,9 +1449,11 @@ class DQEngine:
                             ) = rule_func(
                                 df,
                                 None,
-                                key_columns
+                                duplicate_columns
                             )
 
+                            # Keep the configured expression
+                            # for reporting/result identification.
                             column_name_for_report = (
                                 column_key
                             )

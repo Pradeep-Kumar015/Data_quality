@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 # DQM CONFIGURATION
 # ============================================================
 
-SUBJECT_AREA: str = "udx_maximo_5_load"
+SUBJECT_AREA: str = "udx_maximo_dqm"
 
 DAG_ID: str = "udx_maximo_dqm"
 
