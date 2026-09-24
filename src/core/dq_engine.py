@@ -253,7 +253,6 @@ class DQEngine:
         )
 
         if not raw_key_columns:
-
             raise ValueError(
                 "KEY_COLUMNS is required for DQ_002"
             )
@@ -272,14 +271,17 @@ class DQEngine:
                 )
             )
 
+            if not excluded_columns:
+                raise ValueError(
+                    "EXCLUDE(...) does not contain "
+                    "any columns."
+                )
+
             excluded_columns_upper = {
                 column.upper()
                 for column in excluded_columns
             }
 
-            # Snowpark DataFrame column names
-            # are normally returned in uppercase for
-            # unquoted Snowflake identifiers.
             source_columns = list(
                 df.columns
             )
@@ -292,7 +294,6 @@ class DQEngine:
             ]
 
             if not duplicate_columns:
-
                 raise ValueError(
                     "DQ_002 EXCLUDE configuration "
                     "removed all columns from the "
@@ -320,14 +321,13 @@ class DQEngine:
         )
 
         if not duplicate_columns:
-
             raise ValueError(
                 "No duplicate comparison columns "
                 "were found for DQ_002"
             )
 
         # --------------------------------------------------------
-        # Validate that configured columns exist
+        # Validate configured columns exist
         # --------------------------------------------------------
 
         source_columns = {
@@ -343,7 +343,6 @@ class DQEngine:
         ]
 
         if missing_columns:
-
             raise ValueError(
                 "DQ_002 configured KEY_COLUMNS "
                 "do not exist in source table: "
@@ -379,14 +378,8 @@ class DQEngine:
         """
         Check whether this DQ configuration has already completed.
 
-        DQ_EXECUTION_LOG.STATUS represents execution completion.
-
-        STATUS = COMPLETED
-            Means the DQ configuration completed successfully.
-
-        PASS / FAIL
-            Belongs to DQ_RESULT and represents the actual
-            data-quality result.
+        STATUS = COMPLETED means execution completed.
+        PASS / FAIL belongs to DQ_RESULT.
         """
 
         column_value = column_name or ""
@@ -462,22 +455,11 @@ class DQEngine:
         Insert a successfully completed DQ execution.
 
         STATUS is always COMPLETED.
-
-        DQ_RESULT contains the actual DQ PASS / FAIL result.
-
-        This method:
-            1. Inserts the execution log.
-            2. Immediately verifies the inserted record.
-            3. Returns True only when the record exists.
         """
 
         column_value = column_name or ""
 
         try:
-
-            # ----------------------------------------------------
-            # INSERT EXECUTION LOG
-            # ----------------------------------------------------
 
             insert_sql = f"""
                 INSERT INTO {self.execution_log_table}
@@ -526,10 +508,6 @@ class DQEngine:
                 f"CONFIG_ID={config_id}, "
                 f"COLUMN={column_value}"
             )
-
-            # ----------------------------------------------------
-            # VERIFY INSERT
-            # ----------------------------------------------------
 
             verify_sql = f"""
                 SELECT COUNT(*) AS CNT
@@ -703,13 +681,11 @@ class DQEngine:
         )
 
         if not rule_id:
-
             raise ValueError(
                 f"RULE_ID missing: {row_dict}"
             )
 
         if not config_id:
-
             raise ValueError(
                 f"CONFIG_ID missing for "
                 f"{rule_id}: {row_dict}"
@@ -726,15 +702,10 @@ class DQEngine:
             )
 
             if not raw_key_columns:
-
                 raise ValueError(
                     f"KEY_COLUMNS missing for "
                     f"{rule_id}: {row_dict}"
                 )
-
-            # ----------------------------------------------------
-            # Validate EXCLUDE(...) expression
-            # ----------------------------------------------------
 
             if self._is_exclude_expression(
                 raw_key_columns
@@ -747,7 +718,6 @@ class DQEngine:
                 )
 
                 if not excluded_columns:
-
                     raise ValueError(
                         f"EXCLUDE(...) does not contain "
                         f"any columns for {rule_id}: "
@@ -763,7 +733,6 @@ class DQEngine:
                 )
 
                 if not key_columns:
-
                     raise ValueError(
                         f"KEY_COLUMNS missing for "
                         f"{rule_id}: {row_dict}"
@@ -782,7 +751,6 @@ class DQEngine:
             )
 
             if not custom_sql:
-
                 raise ValueError(
                     f"CUSTOM_SQL missing for "
                     f"{rule_id}: {row_dict}"
@@ -799,7 +767,6 @@ class DQEngine:
         )
 
         if not column_name:
-
             raise ValueError(
                 f"COLUMN_NAME missing for "
                 f"{rule_id}: {row_dict}"
@@ -858,7 +825,6 @@ class DQEngine:
             )
 
             if candidate:
-
                 partition_column = candidate
                 break
 
@@ -934,19 +900,6 @@ class DQEngine:
             - execution logging
             - result identification
             - reporting
-
-        For DQ_002, the configured KEY_COLUMNS expression
-        is preserved exactly as the logical key.
-
-        Example:
-
-            ITEM_SET_ID,ITEM_ID
-
-        or:
-
-            EXCLUDE(SOURCE_ID,FILE_ID,RECORD_ID,
-                    LOAD_DATE_TIME,LOAD_DATE_TIME_GMT,
-                    RECORD_END_DATE_TIME)
         """
 
         # ========================================================
@@ -972,17 +925,15 @@ class DQEngine:
             )
 
             if not raw_key_columns:
-
                 raise ValueError(
                     f"KEY_COLUMNS missing for "
                     f"{rule_id}: {row_dict}"
                 )
 
-            # Preserve EXCLUDE(...) expression exactly
+            # Preserve EXCLUDE(...) expression exactly.
             if self._is_exclude_expression(
                 raw_key_columns
             ):
-
                 return raw_key_columns
 
             key_columns = self._get_key_columns(
@@ -990,7 +941,6 @@ class DQEngine:
             )
 
             if not key_columns:
-
                 raise ValueError(
                     f"KEY_COLUMNS missing for "
                     f"{rule_id}: {row_dict}"
@@ -1009,7 +959,6 @@ class DQEngine:
         )
 
         if not column_name:
-
             raise ValueError(
                 f"COLUMN_NAME missing for "
                 f"{rule_id}: {row_dict}"
@@ -1099,65 +1048,43 @@ class DQEngine:
                 row_dict.get("CONFIG_ID")
             )
 
-            # ----------------------------------------------------
-            # REQUIRED FIELDS
-            # ----------------------------------------------------
-
             if not database:
-
                 raise ValueError(
                     f"DATABASE_NAME missing: {row_dict}"
                 )
 
             if not schema:
-
                 raise ValueError(
                     f"SCHEMA_NAME missing: {row_dict}"
                 )
 
             if not table:
-
                 raise ValueError(
                     f"TABLE_NAME missing: {row_dict}"
                 )
 
             if not rule_id:
-
                 raise ValueError(
                     f"RULE_ID missing: {row_dict}"
                 )
 
             if not config_id:
-
                 raise ValueError(
                     f"CONFIG_ID missing: {row_dict}"
                 )
-
-            # ----------------------------------------------------
-            # NORMALIZE COLUMN_NAMES -> COLUMN_NAME
-            # ----------------------------------------------------
 
             column_name = self._get_string(
                 row_dict.get("COLUMN_NAME")
             )
 
             if column_name:
-
                 row_dict["COLUMN_NAME"] = (
                     column_name
                 )
 
-            # ----------------------------------------------------
-            # VALIDATE
-            # ----------------------------------------------------
-
             self._validate_rule_config(
                 row_dict
             )
-
-            # ----------------------------------------------------
-            # GROUP
-            # ----------------------------------------------------
 
             key = (
                 database,
@@ -1222,7 +1149,6 @@ class DQEngine:
                     df is None
                     or total_count == 0
                 ):
-
                     continue
 
                 processed_tables[
@@ -1373,7 +1299,6 @@ class DQEngine:
                             )
 
                             if not custom_sql:
-
                                 raise ValueError(
                                     f"CUSTOM_SQL missing for "
                                     f"{rule_id}"
@@ -1398,25 +1323,6 @@ class DQEngine:
 
                         elif rule_id == "DQ_002":
 
-                            # ------------------------------------------------
-                            # Resolve actual duplicate comparison columns.
-                            #
-                            # Example:
-                            #
-                            # KEY_COLUMNS =
-                            # EXCLUDE(
-                            #   SOURCE_ID,
-                            #   FILE_ID,
-                            #   RECORD_ID,
-                            #   LOAD_DATE_TIME,
-                            #   LOAD_DATE_TIME_GMT,
-                            #   RECORD_END_DATE_TIME
-                            # )
-                            #
-                            # becomes all source columns except the
-                            # excluded technical columns.
-                            # ------------------------------------------------
-
                             duplicate_columns = (
                                 self._get_duplicate_columns(
                                     df,
@@ -1425,7 +1331,6 @@ class DQEngine:
                             )
 
                             if not duplicate_columns:
-
                                 raise ValueError(
                                     f"No duplicate comparison "
                                     f"columns found for "
@@ -1442,18 +1347,22 @@ class DQEngine:
                                 f"{duplicate_columns}"
                             )
 
+                            # IMPORTANT:
+                            # DQ_002 accepts only:
+                            #
+                            #     rule_func(df, duplicate_columns)
+                            #
+                            # Do NOT pass None as a third argument.
+
                             (
                                 failed_df,
                                 failed_count,
                                 rule_expression
                             ) = rule_func(
                                 df,
-                                None,
                                 duplicate_columns
                             )
 
-                            # Keep the configured expression
-                            # for reporting/result identification.
                             column_name_for_report = (
                                 column_key
                             )
@@ -1495,13 +1404,11 @@ class DQEngine:
                             ]
 
                             if min_val is not None:
-
                                 params.append(
                                     min_val
                                 )
 
                             if max_val is not None:
-
                                 params.append(
                                     max_val
                                 )
@@ -1609,7 +1516,6 @@ class DQEngine:
                     fail_count += 1
 
                     if severity == "HIGH":
-
                         critical_fail_count += 1
 
                     continue
@@ -1743,11 +1649,6 @@ class DQEngine:
                         "Execution will NOT be marked COMPLETED."
                     )
 
-                    # ---------------------------------------------
-                    # Generate error report because DQ_RESULT
-                    # was not successfully persisted.
-                    # ---------------------------------------------
-
                     try:
 
                         empty_failed_df = (
@@ -1797,7 +1698,6 @@ class DQEngine:
                     fail_count += 1
 
                     if severity == "HIGH":
-
                         critical_fail_count += 1
 
                     continue
@@ -1821,7 +1721,6 @@ class DQEngine:
                     fail_count += 1
 
                     if severity == "HIGH":
-
                         critical_fail_count += 1
 
         # ========================================================
