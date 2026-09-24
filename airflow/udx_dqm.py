@@ -82,9 +82,6 @@ def download_and_run_dqm():
 
         BI_DATA_QUALITY_UAT
 
-    The DQM metadata tables must use fully-qualified
-    database.schema.table names.
-
     No local Snowflake JSON connection is used.
 
     No second Snowflake connection is required.
@@ -159,7 +156,7 @@ def download_and_run_dqm():
         SUBJECT_AREA,
     )
 
-    # Use existing Organization S3 configuration.
+    # Existing Organization S3 configuration.
     #
     # No new S3Hook.
     # No new AWS connection.
@@ -483,16 +480,6 @@ def download_and_run_dqm():
     # --------------------------------------------------------
     # 9A. AIRFLOW SNOWFLAKE CONNECTION
     # --------------------------------------------------------
-    #
-    # The DQM SnowflakeConnector reads this connection ID
-    # and retrieves the complete connection from Airflow.
-    #
-    # The connector also reads the private-key passphrase
-    # directly from the Password field of this connection.
-    #
-    # The passphrase is NOT copied into an environment
-    # variable by this DAG.
-    # --------------------------------------------------------
 
     env["SNOWFLAKE_AIRFLOW_CONNECTION_ID"] = (
         SNOWFLAKE_CONNECTION_ID
@@ -791,6 +778,7 @@ def download_and_run_dqm():
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            bufsize=1,
             check=False,
         )
 
@@ -806,7 +794,7 @@ def download_and_run_dqm():
         ) from exc
 
     # --------------------------------------------------------
-    # 17. Capture DQM output
+    # 17. Capture and forward DQM output
     # --------------------------------------------------------
 
     dqm_output = result.stdout or ""
@@ -815,10 +803,20 @@ def download_and_run_dqm():
     logger.info("DQM PROCESS OUTPUT START")
     logger.info("==================================================")
 
-    logger.info(
-        "%s",
-        dqm_output or "<DQM PROCESS PRODUCED NO OUTPUT>",
-    )
+    if dqm_output:
+
+        for line in dqm_output.splitlines():
+
+            logger.info(
+                "DQM | %s",
+                line,
+            )
+
+    else:
+
+        logger.info(
+            "No DQM process output captured."
+        )
 
     logger.info("==================================================")
     logger.info("DQM PROCESS OUTPUT END")
