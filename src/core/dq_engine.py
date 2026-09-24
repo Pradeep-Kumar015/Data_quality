@@ -720,8 +720,10 @@ class DQEngine:
 
         if rule_id == "DQ_005":
 
-            custom_sql = self._get_string(
-                row_dict.get("CUSTOM_SQL")
+            custom_sql = (
+                self._get_string(
+                    row_dict.get("CUSTOM_SQL")
+                )
             )
 
             if not custom_sql:
@@ -986,6 +988,12 @@ class DQEngine:
         critical_fail_count = 0
 
         processed_tables = {}
+
+        # ========================================================
+        # GROUP DQ CONFIGURATION
+        # ========================================================
+
+        grouped_rules = defaultdict(list)
 
         # ========================================================
         # STEP 1 - LOAD CONFIGURATION
@@ -1273,8 +1281,8 @@ class DQEngine:
                 failed_df = None
 
                 # IMPORTANT:
-                # failed_count must represent the actual number
-                # of failed records returned by the rule.
+                # failed_count represents the actual number
+                # of failed records returned by the DQ rule.
                 failed_count = 0
 
                 rule_expression = ""
@@ -1320,6 +1328,12 @@ class DQEngine:
                                 custom_sql
                             )
 
+                            failed_count = (
+                                self._normalize_failed_count(
+                                    failed_count
+                                )
+                            )
+
                             column_name_for_report = (
                                 column_key
                             )
@@ -1355,10 +1369,10 @@ class DQEngine:
                             )
 
                             # -------------------------------------
-                            # DQ_002 RULE
+                            # DQ_002 RULE CONTRACT
                             # -------------------------------------
                             #
-                            # The duplicate rule must return:
+                            # The rule must return:
                             #
                             #   failed_df
                             #   failed_count
@@ -1376,8 +1390,7 @@ class DQEngine:
                             #
                             #   failed_count = 279796
                             #
-                            # and is passed to generate_report()
-                            # as FAILED_RECORD_COUNT.
+                            # and is passed to generate_report().
                             # -------------------------------------
 
                             (
@@ -1388,12 +1401,6 @@ class DQEngine:
                                 df,
                                 duplicate_columns
                             )
-
-                            # -------------------------------------
-                            # Normalize the returned count.
-                            # DO NOT calculate another count here.
-                            # The DQ rule is the source of truth.
-                            # -------------------------------------
 
                             failed_count = (
                                 self._normalize_failed_count(
@@ -1617,13 +1624,12 @@ class DQEngine:
                             total_count=total_count,
 
                             # IMPORTANT:
-                            # This is the actual duplicate/
-                            # validation failure count.
+                            # Actual failed record count.
                             #
-                            # For Inventory:
+                            # For Inventory DQ_002:
                             #     279796
                             #
-                            # This value becomes:
+                            # This becomes:
                             #     DQ_RESULT.FAILED_RECORD_COUNT
                             #
                             failed_count=failed_count,
@@ -1744,7 +1750,7 @@ class DQEngine:
                             severity=severity,
                             total_count=total_count,
 
-                            # Preserve the actual failed count here.
+                            # Preserve actual failed count.
                             failed_count=failed_count,
 
                             start_time=start_time,
