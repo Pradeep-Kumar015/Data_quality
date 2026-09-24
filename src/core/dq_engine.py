@@ -227,10 +227,6 @@ class DQEngine:
 
             ITEM_SET_ID,ITEM_ID
 
-        Result:
-
-            Compare only ITEM_SET_ID and ITEM_ID.
-
         2. Whole-row duplicate detection:
 
             EXCLUDE(
@@ -242,10 +238,8 @@ class DQEngine:
                 RECORD_END_DATE_TIME
             )
 
-        Result:
-
-            Compare every source-table column except the
-            excluded technical/audit columns.
+        In whole-row mode, every source-table column except
+        the excluded technical/audit columns is compared.
         """
 
         raw_key_columns = self._get_string(
@@ -326,10 +320,6 @@ class DQEngine:
                 "were found for DQ_002"
             )
 
-        # --------------------------------------------------------
-        # Validate configured columns exist
-        # --------------------------------------------------------
-
         source_columns = {
             str(column).upper(): column
             for column in df.columns
@@ -349,7 +339,6 @@ class DQEngine:
                 f"{missing_columns}"
             )
 
-        # Use actual source-table column casing.
         duplicate_columns = [
             source_columns[column.upper()]
             for column in duplicate_columns
@@ -650,21 +639,6 @@ class DQEngine:
         DQ_002:
             Requires KEY_COLUMNS.
 
-            KEY_COLUMNS can be:
-
-                ITEM_SET_ID,ITEM_ID
-
-            or:
-
-                EXCLUDE(
-                    SOURCE_ID,
-                    FILE_ID,
-                    RECORD_ID,
-                    LOAD_DATE_TIME,
-                    LOAD_DATE_TIME_GMT,
-                    RECORD_END_DATE_TIME
-                )
-
         DQ_005:
             Requires CUSTOM_SQL.
 
@@ -930,7 +904,6 @@ class DQEngine:
                     f"{rule_id}: {row_dict}"
                 )
 
-            # Preserve EXCLUDE(...) expression exactly.
             if self._is_exclude_expression(
                 raw_key_columns
             ):
@@ -967,6 +940,37 @@ class DQEngine:
         return column_name
 
     # ============================================================
+    # NORMALIZE FAILED COUNT
+    # ============================================================
+
+    @staticmethod
+    def _normalize_failed_count(
+        failed_count
+    ):
+        """
+        Ensure failed_count is always stored as an integer.
+
+        This value is passed directly to the report generator
+        and ultimately becomes DQ_RESULT.FAILED_RECORD_COUNT.
+
+        For DQ_002, if the duplicate rule returns 279796,
+        FAILED_RECORD_COUNT will be 279796.
+        """
+
+        if failed_count is None:
+            return 0
+
+        try:
+            return int(failed_count)
+
+        except (TypeError, ValueError) as exc:
+
+            raise ValueError(
+                "Invalid failed_count returned by "
+                f"DQ rule: {failed_count}"
+            ) from exc
+
+    # ============================================================
     # EXECUTE
     # ============================================================
 
@@ -982,8 +986,6 @@ class DQEngine:
         critical_fail_count = 0
 
         processed_tables = {}
-
-        grouped_rules = defaultdict(list)
 
         # ========================================================
         # STEP 1 - LOAD CONFIGURATION
@@ -1269,7 +1271,12 @@ class DQEngine:
                 query_id = None
                 query_history = None
                 failed_df = None
+
+                # IMPORTANT:
+                # failed_count must represent the actual number
+                # of failed records returned by the rule.
                 failed_count = 0
+
                 rule_expression = ""
 
                 # =================================================
@@ -1347,12 +1354,31 @@ class DQEngine:
                                 f"{duplicate_columns}"
                             )
 
-                            # IMPORTANT:
-                            # DQ_002 accepts only:
+                            # -------------------------------------
+                            # DQ_002 RULE
+                            # -------------------------------------
                             #
-                            #     rule_func(df, duplicate_columns)
+                            # The duplicate rule must return:
                             #
-                            # Do NOT pass None as a third argument.
+                            #   failed_df
+                            #   failed_count
+                            #   rule_expression
+                            #
+                            # failed_count represents the number
+                            # of rows participating in duplicate
+                            # groups.
+                            #
+                            # Example:
+                            #
+                            #   279796 duplicate rows
+                            #
+                            # becomes:
+                            #
+                            #   failed_count = 279796
+                            #
+                            # and is passed to generate_report()
+                            # as FAILED_RECORD_COUNT.
+                            # -------------------------------------
 
                             (
                                 failed_df,
@@ -1361,6 +1387,29 @@ class DQEngine:
                             ) = rule_func(
                                 df,
                                 duplicate_columns
+                            )
+
+                            # -------------------------------------
+                            # Normalize the returned count.
+                            # DO NOT calculate another count here.
+                            # The DQ rule is the source of truth.
+                            # -------------------------------------
+
+                            failed_count = (
+                                self._normalize_failed_count(
+                                    failed_count
+                                )
+                            )
+
+                            logger.info(
+                                "DQ_002 duplicate count calculated: "
+                                f"RULE_ID={rule_id}, "
+                                f"CONFIG_ID={config_id}, "
+                                f"TABLE={full_table_name}, "
+                                f"DUPLICATE_COLUMNS="
+                                f"{duplicate_columns}, "
+                                f"FAILED_RECORD_COUNT="
+                                f"{failed_count}"
                             )
 
                             column_name_for_report = (
@@ -1387,6 +1436,12 @@ class DQEngine:
                                 df,
                                 column_name,
                                 valid_values
+                            )
+
+                            failed_count = (
+                                self._normalize_failed_count(
+                                    failed_count
+                                )
                             )
 
                             column_name_for_report = (
@@ -1420,6 +1475,12 @@ class DQEngine:
                             ) = rule_func(
                                 df,
                                 *params
+                            )
+
+                            failed_count = (
+                                self._normalize_failed_count(
+                                    failed_count
+                                )
                             )
 
                             column_name_for_report = (
@@ -1533,7 +1594,8 @@ class DQEngine:
                         f"Generating DQ result for "
                         f"{rule_id}, "
                         f"CONFIG_ID={config_id}, "
-                        f"COLUMN={column_name_for_report}"
+                        f"COLUMN={column_name_for_report}, "
+                        f"FAILED_RECORD_COUNT={failed_count}"
                     )
 
                     rule_status = (
@@ -1553,7 +1615,19 @@ class DQEngine:
                             threshold=threshold,
                             severity=severity,
                             total_count=total_count,
+
+                            # IMPORTANT:
+                            # This is the actual duplicate/
+                            # validation failure count.
+                            #
+                            # For Inventory:
+                            #     279796
+                            #
+                            # This value becomes:
+                            #     DQ_RESULT.FAILED_RECORD_COUNT
+                            #
                             failed_count=failed_count,
+
                             start_time=start_time,
                             executed_by="DQ_TOOL",
                             source_table=full_table_name,
@@ -1566,7 +1640,8 @@ class DQEngine:
                         f"Completed DQ result generation: "
                         f"{rule_id}, "
                         f"CONFIG_ID={config_id}, "
-                        f"RESULT_STATUS={rule_status}"
+                        f"RESULT_STATUS={rule_status}, "
+                        f"FAILED_RECORD_COUNT={failed_count}"
                     )
 
                 except Exception as report_error:
@@ -1578,6 +1653,7 @@ class DQEngine:
                         f"RULE_ID={rule_id}, "
                         f"CONFIG_ID={config_id}, "
                         f"COLUMN={column_key}, "
+                        f"FAILED_RECORD_COUNT={failed_count}, "
                         f"ERROR={report_error}"
                     )
 
@@ -1667,7 +1743,10 @@ class DQEngine:
                             threshold=threshold,
                             severity=severity,
                             total_count=total_count,
+
+                            # Preserve the actual failed count here.
                             failed_count=failed_count,
+
                             start_time=start_time,
                             executed_by="DQ_TOOL",
                             source_table=full_table_name,
