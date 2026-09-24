@@ -1,6 +1,7 @@
+import os
+
 from src.core.dq_runner import DQRunner
 from src.utils.logger import get_logger
-import os
 
 
 logger = get_logger(__name__)
@@ -16,7 +17,7 @@ def main():
 
         # --------------------------------------------------
         # Execute framework
-        # Returns 5 metrics now
+        # Returns 5 metrics
         # --------------------------------------------------
         (
             tables_checked,
@@ -27,31 +28,31 @@ def main():
         ) = runner.run()
 
         # --------------------------------------------------
-        # Log execution summary
+        # DQ Execution Summary
         # --------------------------------------------------
-        logger.info("DQ Execution Summary:")
-        logger.info(f"Tables Checked: {tables_checked}")
-        logger.info(f"Rules Executed: {rules_executed}")
-        logger.info(f"Passed: {pass_count}")
-        logger.info(f"Failed: {fail_count}")
-        logger.info(f"Critical Failed: {critical_fail_count}")
-
-        # --------------------------------------------------
-        # CLI-friendly output
-        # --------------------------------------------------
-        print("\n===== DQ EXECUTION SUMMARY =====")
-        print(f"Tables Checked   : {tables_checked}")
-        print(f"Rules Executed   : {rules_executed}")
-        print(f"Passed           : {pass_count}")
-        print(f"Failed           : {fail_count}")
-        print(f"Critical Failed  : {critical_fail_count}")
-        print("================================\n")
+        logger.info("")
+        logger.info("===== DQ EXECUTION SUMMARY =====")
+        logger.info("Tables Checked   : %s", tables_checked)
+        logger.info("Rules Executed   : %s", rules_executed)
+        logger.info("Passed           : %s", pass_count)
+        logger.info("Failed           : %s", fail_count)
+        logger.info("Critical Failed  : %s", critical_fail_count)
+        logger.info("================================")
+        logger.info("")
 
         # --------------------------------------------------
         # Environment-aware pipeline stop logic
-        # Only stop in PROD environment
+        # Only stop pipeline in PROD
         # --------------------------------------------------
-        environment = os.getenv("ENVIRONMENT", "DEV")
+        environment = os.getenv(
+            "ENVIRONMENT",
+            "DEV"
+        ).upper()
+
+        logger.info(
+            "DQ Environment: %s",
+            environment
+        )
 
         if critical_fail_count > 0 and environment == "PROD":
 
@@ -68,20 +69,24 @@ def main():
 
             logger.warning(
                 "Critical rules failed but pipeline continues "
-                "(DEV mode)."
+                "(%s mode).",
+                environment
             )
 
         else:
 
             logger.info(
-                "DQ Framework execution completed successfully ✅"
+                "DQ Framework execution completed successfully"
             )
 
     except Exception as e:
 
-        logger.error(f"DQ execution failed: {str(e)}")
+        logger.error(
+            "DQ execution failed: %s",
+            str(e)
+        )
 
-        # Required so Airflow marks task FAILED
+        # Required so Airflow marks the task as FAILED
         raise
 
 
